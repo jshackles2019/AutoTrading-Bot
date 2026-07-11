@@ -1,0 +1,260 @@
+Title: Breakout Trading Bot – Alpaca (IBKR-Ready) Full Guide
+Author: John’s Autotrading Project
+
+============================================================
+1. PROJECT OVERVIEW
+============================================================
+
+Goal:
+- Build a Python-based breakout day-trading bot using Alpaca’s API.
+- Start with paper trading.
+- Design architecture so it can later be ported to Interactive Brokers (IBKR).
+
+Core features:
+- Breakout detection (support/resistance + volume).
+- PDT-conscious cash/risk management.
+- Automated order execution (paper first).
+- Logging and journaling.
+
+============================================================
+2. PROJECT STRUCTURE
+============================================================
+
+Recommended folder layout:
+
+trading-bot/
+├─ config/
+│  ├─ settings.yaml          # API keys, risk params, symbols, timeframes
+├─ data/
+│  ├─ logs/                  # Text/JSON logs
+│  ├─ trades/                # CSV/DB for trade history
+├─ src/
+│  ├─ main.py                # Entry point
+│  ├─ alpaca_client.py       # Alpaca API wrapper
+│  ├─ strategy_breakout.py   # Breakout detection logic
+│  ├─ risk_manager.py        # Position sizing, cash rotation, limits
+│  ├─ executor.py            # Order placement, monitoring, exits
+│  ├─ logger.py              # Unified logging/journaling
+│  ├─ utils.py               # Helpers (time, config loading, etc.)
+├─ tests/
+│  ├─ test_strategy.py       # Unit tests for breakout logic
+│  ├─ test_risk.py           # Unit tests for risk/cash logic
+├─ requirements.txt          # Python dependencies
+├─ README.md                 # Documentation (this guide)
+└─ .env                      # Environment variables (API keys, etc.)
+
+============================================================
+3. SETUP – ACCOUNTS & ENVIRONMENT
+============================================================
+
+Step 1 – Create Alpaca account:
+- Sign up for Alpaca.
+- Enable PAPER TRADING.
+- Generate:
+  - API Key ID
+  - Secret Key
+
+Step 2 – Store credentials:
+- Put keys in `.env`:
+  - ALPACA_KEY_ID=...
+  - ALPACA_SECRET_KEY=...
+  - ALPACA_PAPER=True
+
+Step 3 – Python environment:
+- Create virtual environment:
+  - python -m venv venv
+  - source venv/bin/activate (Linux/macOS)
+  - venv\Scripts\activate (Windows)
+- Install dependencies:
+  - pip install alpaca-py pyyaml python-dotenv
+
+Step 4 – Test connection:
+- In `alpaca_client.py`, write a simple function to fetch account info and print buying power.
+
+============================================================
+4. CORE MODULES – RESPONSIBILITIES
+============================================================
+
+alpaca_client.py
+- Connect to Alpaca using keys from `.env`.
+- Provide functions:
+  - get_account()
+  - get_bars(symbol, timeframe, lookback)
+  - submit_order(order_params)
+  - get_open_positions()
+
+strategy_breakout.py
+- Input: recent OHLCV bars for a symbol.
+- Output: signal object (e.g., {symbol, action: "BUY"/"NONE", entry_level, stop_level}).
+- Logic:
+  - Identify support (recent lows) and resistance (recent highs).
+  - Check if last close > resistance.
+  - Check if volume > X% of average.
+  - Optional: volatility expansion (range > recent average).
+
+risk_manager.py
+- Input: account info, signal, config (max risk %, max trades/day).
+- Output: position size, whether trade is allowed.
+- Logic:
+  - Compute max risk per trade (e.g., 1% of equity).
+  - Compute risk per share (entry - stop).
+  - shares = floor(max_risk_dollars / risk_per_share).
+  - Enforce:
+    - Max trades per day.
+    - Max total open risk.
+
+executor.py
+- Input: signal + position size.
+- Output: order submission via Alpaca.
+- Logic:
+  - Build order (market or limit).
+  - Optionally use bracket orders (take-profit + stop-loss).
+  - Monitor open positions and exit on stop/time rules.
+
+logger.py
+- Log:
+  - Signals
+  - Orders
+  - Fills
+  - PnL
+- Save to:
+  - data/logs/*.log
+  - data/trades/*.csv
+
+============================================================
+5. MAIN LOOP – PSEUDO-CODE
+============================================================
+
+File: src/main.py
+
+Pseudo-code:
+
+load_config()
+init_alpaca_client()
+init_logger()
+
+symbols = config["symbols"]
+timeframe = config["timeframe"]
+loop_interval = config["loop_interval_seconds"]
+
+while market_is_open():
+    for symbol in symbols:
+        bars = alpaca_client.get_bars(symbol, timeframe, lookback=config["lookback"])
+        
+        signal = strategy_breakout.evaluate(bars, symbol)
+        
+        if signal.action == "BUY":
+            account = alpaca_client.get_account()
+            
+            risk_decision = risk_manager.evaluate(
+                account=account,
+                signal=signal,
+                config=config["risk"]
+            )
+            
+            if risk_decision.allowed:
+                order_params = {
+                    "symbol": symbol,
+                    "qty": risk_decision.shares,
+                    "side": "buy",
+                    "type": "market",
+                    "time_in_force": "day",
+                    "stop_loss": signal.stop_level,
+                    "take_profit": signal.target_level
+                }
+                
+                order = executor.submit_order(order_params)
+                
+                logger.log_trade(signal, risk_decision, order)
+            else:
+                logger.log_skip(symbol, reason=risk_decision.reason)
+        else:
+            logger.log_no_signal(symbol)
+    
+    sleep(loop_interval)
+
+============================================================
+6. STEP-BY-STEP IMPLEMENTATION FLOW
+============================================================
+
+Step 1 – Config & environment:
+- Create `config/settings.yaml` with:
+  - symbols
+  - timeframe (e.g., 5Min)
+  - lookback (e.g., 50 bars)
+  - risk settings (max_risk_pct, max_trades_per_day)
+  - volume_threshold, etc.
+
+Step 2 – Alpaca client:
+- Implement functions to:
+  - Load keys from `.env`.
+  - Connect to paper trading endpoint.
+  - Fetch bars (OHLCV).
+  - Submit orders.
+
+Step 3 – Breakout strategy:
+- Start simple:
+  - resistance = max(highs of last N bars)
+  - support = min(lows of last N bars)
+  - breakout if last_close > resistance AND last_volume > avg_volume * factor.
+- Return a structured signal object.
+
+Step 4 – Risk manager:
+- Implement:
+  - get_equity() from account.
+  - max_risk_dollars = equity * max_risk_pct.
+  - shares = floor(max_risk_dollars / (entry - stop)).
+  - Check daily trade count (track in memory or DB).
+
+Step 5 – Executor:
+- Implement order submission using Alpaca’s Python client.
+- For paper trading, log everything and verify behavior.
+
+Step 6 – Logging & journaling:
+- Use `logger.py` to:
+  - Write logs to file.
+  - Append trades to CSV with:
+    - symbol, entry, stop, target, shares, timestamp, result.
+
+Step 7 – Dry run & paper trading:
+- Run bot during market hours in paper mode.
+- Observe:
+  - Signals frequency.
+  - Position sizes.
+  - PnL over days/weeks.
+- Adjust:
+  - Breakout thresholds.
+  - Risk parameters.
+  - Symbols list.
+
+Step 8 – Hardening for IBKR migration:
+- Keep modules cleanly separated:
+  - strategy_breakout.py
+  - risk_manager.py
+  - logger.py
+- When moving to IBKR:
+  - Replace `alpaca_client.py` + `executor.py` with IBKR equivalents.
+  - Keep strategy, risk, logging unchanged.
+
+============================================================
+7. DEPLOYMENT NOTES
+============================================================
+
+Local deployment:
+- Run `python src/main.py` on a machine that’s on during market hours.
+- Use `screen`, `tmux`, or a service manager to keep it running.
+
+Cloud deployment (later):
+- Use a small VPS or cloud instance.
+- Set environment variables securely.
+- Use logging + monitoring (e.g., health checks).
+
+Safety:
+- Start with PAPER TRADING ONLY.
+- Add:
+  - Max daily loss limit.
+  - Global kill switch (e.g., config flag or command).
+
+============================================================
+END OF GUIDE
+============================================================
