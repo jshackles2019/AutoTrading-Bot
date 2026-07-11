@@ -1,0 +1,14 @@
+# Example settings for the Breakout Trading Bot
+
+symbols:
+  - AAPL
+  - SPY
+
+timeframe: 5Min
+lookback: 50
+loop_interval_seconds: 60
+
+risk:
+  max_risk_pct: 0.01   # 1% of equity
+  max_trades_per_day: 3
+  volume_threshold_factor: 1.5

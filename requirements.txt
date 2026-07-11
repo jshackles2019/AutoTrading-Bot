@@ -1,0 +1,4 @@
+alpaca-py
+pyyaml
+python-dotenv
+pytest
