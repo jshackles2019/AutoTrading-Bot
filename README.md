@@ -28,3 +28,17 @@ Files of interest:
 Contributions and notes:
 - Start with paper trading only.
 - See the guide for steps on hardening, migration to IBKR, and deployment.
+
+ How to Run
+Bash
+# Setup
+python -m venv venv
+source venv/bin/activate  # or venv\Scripts\activate on Windows
+pip install -r requirements.txt
+
+# Configure
+cp .env.example .env
+# Add your ALPACA_KEY_ID and ALPACA_SECRET_KEY
+
+# Run
+python src/main.py
