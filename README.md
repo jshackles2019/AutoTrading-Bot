@@ -116,6 +116,7 @@ Optional:
 ```powershell
 ./scripts/run_ui.ps1 -Port 8502
 ./scripts/run_ui.ps1 -Headless
+./scripts/run_ui.ps1 -Address 127.0.0.1   # local-only binding
 ```
 
 ### Run bot with explicit account mode
@@ -172,11 +173,31 @@ The script sets `ALPACA_PAPER` automatically per run:
 Run dashboard:
 
 ```bash
-C:/Users/John/AppData/Local/Python/pythoncore-3.14-64/python.exe -m streamlit run ui/app.py
+C:/Users/John/AppData/Local/Python/pythoncore-3.14-64/python.exe -m streamlit run ui/app.py --server.address 0.0.0.0 --server.port 8501
 ```
 
 Open:
 - `http://localhost:8501`
+
+### Access from Other Devices
+
+#### Internal network (same LAN)
+
+- Allow inbound TCP `8501` on the machine firewall running Streamlit.
+- Find the host LAN IP (for example with `ipconfig`/`ifconfig`).
+- Open from another device: `http://<HOST_LAN_IP>:8501`
+
+#### External access (recommended: private network)
+
+- Prefer a private tunnel/VPN such as Tailscale, ZeroTier, or WireGuard.
+- Access the UI over the VPN address: `http://<vpn-host-ip>:8501`
+
+#### Public internet exposure (higher risk)
+
+- Do not expose raw Streamlit directly on `8501`.
+- Put a reverse proxy (Nginx/Caddy) in front with HTTPS and authentication.
+- Forward router port `443` to the reverse proxy host.
+- Use dynamic DNS or a static IP for stable access.
 
 ### UI Features
 
