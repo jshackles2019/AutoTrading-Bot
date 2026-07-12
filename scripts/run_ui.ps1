@@ -1,5 +1,6 @@
 Param(
     [int]$Port = 8501,
+    [string]$Address = "0.0.0.0",
     [switch]$Headless
 )
 
@@ -11,10 +12,10 @@ if (-not (Test-Path $python)) {
     $python = (Get-Command python -ErrorAction Stop).Source
 }
 
-$args = @("-m", "streamlit", "run", "ui/app.py", "--server.port", "$Port")
+$args = @("-m", "streamlit", "run", "ui/app.py", "--server.address", "$Address", "--server.port", "$Port")
 if ($Headless) {
     $args += @("--server.headless", "true")
 }
 
-Write-Host "Starting Streamlit UI on port $Port..."
+Write-Host "Starting Streamlit UI on $Address`:$Port..."
 & $python @args
