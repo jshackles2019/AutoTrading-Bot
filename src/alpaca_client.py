@@ -7,7 +7,12 @@ from typing import Dict, List, Any, Optional
 from datetime import datetime, timedelta
 import os
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except Exception:
+    # Allow the module to be imported even if python-dotenv isn't installed
+    def load_dotenv():
+        return
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
@@ -223,15 +228,52 @@ def close_position(symbol: str, qty: Optional[int] = None) -> Dict[str, Any]:
         Order details
     """
     try:
+        # If qty is None, attempt to use the TradingClient's close_position helper
+        if qty is None:
+            # Prefer client's close_position if available
+            if hasattr(trading_client, "close_position"):
+                res = trading_client.close_position(symbol)
+                # If the client returned a mapping already, return it
+                if isinstance(res, dict):
+                    return res
+                # Otherwise attempt to normalize the returned object
+                try:
+                    return {
+                        "id": getattr(res, "id", None),
+                        "symbol": getattr(res, "symbol", symbol),
+                        "qty": int(getattr(res, "qty", 0) or 0),
+                        "status": getattr(res, "status", None).value if getattr(res, "status", None) else None,
+                        "created_at": getattr(res, "created_at", None),
+                    }
+                except Exception:
+                    return {"symbol": symbol}
+
+            # Fallback: try to discover current position qty and submit a market sell
+            try:
+                pos = trading_client.get_position(symbol)
+                qty_to_close = int(pos.qty)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to determine position size for {symbol}: {exc}")
+
+            order_params = {
+                "symbol": symbol,
+                "qty": qty_to_close,
+                "side": "sell",
+                "type": "market",
+                "time_in_force": TimeInForce.DAY,
+            }
+            return submit_order(order_params)
+
+        # qty provided: submit a market sell for the requested amount
         order_request = MarketOrderRequest(
             symbol=symbol,
-            qty=qty,  # None means close entire position
+            qty=int(qty),
             side=OrderSide.SELL,
             time_in_force=TimeInForce.DAY,
         )
-        
+
         order = trading_client.submit_order(order_request)
-        
+
         return {
             "id": order.id,
             "symbol": order.symbol,
