@@ -5,11 +5,14 @@ Implements the core trading loop that monitors symbols, generates signals,
 manages risk, and executes trades during market hours.
 """
 
+import argparse
+import json
 import time
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+import statistics
 
 try:
     from src import alpaca_client, utils
@@ -26,16 +29,119 @@ except ImportError:
     from logger import get_logger
 
 
+DATA_UI_DIR = Path(__file__).resolve().parents[1] / "data" / "ui"
+SCANNER_SNAPSHOT_PATH = DATA_UI_DIR / "scanner_snapshot.json"
+
+
+def _parse_symbols(symbols_csv: Optional[str]) -> List[str]:
+    """Parse comma-separated symbols and normalize to uppercase unique list."""
+    if not symbols_csv:
+        return []
+    normalized: List[str] = []
+    for token in symbols_csv.split(","):
+        symbol = token.strip().upper()
+        if symbol and symbol not in normalized:
+            normalized.append(symbol)
+    return normalized
+
+
+def _resolve_symbols(
+    config: Dict[str, Any],
+    symbol_universe: str,
+    symbols_csv: Optional[str],
+    append_symbols: bool,
+    max_symbols: Optional[int],
+) -> List[str]:
+    """Resolve final symbol list from config, CLI overrides, and optional universe mode."""
+    if symbol_universe == "us-all":
+        base_symbols = alpaca_client.get_tradeable_us_symbols(max_symbols=max_symbols)
+    else:
+        base_symbols = list(config.get("symbols", []))
+
+    cli_symbols = _parse_symbols(symbols_csv)
+    if not cli_symbols:
+        return base_symbols
+
+    if append_symbols:
+        seen = set(base_symbols)
+        merged = list(base_symbols)
+        for symbol in cli_symbols:
+            if symbol not in seen:
+                merged.append(symbol)
+                seen.add(symbol)
+        return merged
+
+    return cli_symbols
+
+
+def _resolve_scanner_config(config: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
+    """Resolve scanner configuration from settings + CLI overrides."""
+    scanner = dict(config.get("scanner", {}))
+
+    if args.top_candidates is not None:
+        scanner["top_candidates"] = args.top_candidates
+    if args.min_price is not None:
+        scanner["min_price"] = args.min_price
+    if args.max_price is not None:
+        scanner["max_price"] = args.max_price
+    if args.min_average_volume is not None:
+        scanner["min_average_volume"] = args.min_average_volume
+    if args.volume_ratio_cap is not None:
+        scanner["volume_ratio_cap"] = args.volume_ratio_cap
+
+    scanner.setdefault("top_candidates", 20)
+    scanner.setdefault("min_price", None)
+    scanner.setdefault("max_price", None)
+    scanner.setdefault("min_average_volume", None)
+    scanner.setdefault("volume_ratio_cap", 5.0)
+
+    default_weights = {
+        "confidence": 50.0,
+        "breakout": 200.0,
+        "volume": 10.0,
+        "momentum": 100.0,
+    }
+    configured_weights = scanner.get("score_weights", {})
+    if not isinstance(configured_weights, dict):
+        configured_weights = {}
+    weights = dict(default_weights)
+    weights.update(configured_weights)
+    if args.weight_confidence is not None:
+        weights["confidence"] = args.weight_confidence
+    if args.weight_breakout is not None:
+        weights["breakout"] = args.weight_breakout
+    if args.weight_volume is not None:
+        weights["volume"] = args.weight_volume
+    if args.weight_momentum is not None:
+        weights["momentum"] = args.weight_momentum
+    scanner["score_weights"] = weights
+
+    config["scanner"] = scanner
+    return scanner
+
+
 class TradingSession:
     """Manages a single trading session."""
     
-    def __init__(self, config: Dict[str, Any]):
+    def __init__(
+        self,
+        config: Dict[str, Any],
+        dry_run: bool = False,
+        max_loops: Optional[int] = None,
+        bypass_market_hours: bool = False,
+    ):
         """Initialize trading session.
         
         Args:
             config: Configuration dictionary from settings.yaml
+            dry_run: If True, simulate order execution without live order API calls
+            max_loops: Optional limit for loop iterations (useful for deterministic testing)
+            bypass_market_hours: If True, allow loop iterations even when market is closed
         """
         self.config = config
+        self.dry_run = dry_run
+        self.max_loops = max_loops if (max_loops is None or max_loops >= 1) else 1
+        self.bypass_market_hours = bypass_market_hours
         self.logger = get_logger()
         
         # Trading state
@@ -51,6 +157,8 @@ class TradingSession:
         """Run the main trading loop."""
         self.logger.logger.info("="*60)
         self.logger.logger.info("TRADING SESSION STARTED")
+        if self.dry_run:
+            self.logger.logger.warning("DRY-RUN MODE ENABLED: no live orders will be submitted")
         self.logger.logger.info("="*60)
         
         try:
@@ -62,8 +170,13 @@ class TradingSession:
             # Main loop
             loop_count = 0
             loop_interval = self.config.get("loop_interval_seconds", 60)
+            if self.max_loops is not None:
+                self.logger.logger.info(f"Loop limit enabled: {self.max_loops} iteration(s)")
+
+            def _can_run_loop() -> bool:
+                return utils.is_market_open() or self.bypass_market_hours
             
-            while utils.is_market_open():
+            while _can_run_loop():
                 loop_count += 1
                 self.logger.logger.debug(f"\n--- Loop {loop_count} ---")
                 
@@ -71,10 +184,14 @@ class TradingSession:
                     self._loop_iteration(account)
                 except Exception as e:
                     self.logger.log_error(f"Error in loop iteration: {e}", exc_info=e)
+
+                if self.max_loops is not None and loop_count >= self.max_loops:
+                    self.logger.logger.info(f"Reached max loops ({self.max_loops}). Ending session.")
+                    break
                 
                 # Check remaining market time
                 remaining = utils.market_hours_remaining()
-                if remaining.total_seconds() < loop_interval:
+                if not self.bypass_market_hours and remaining.total_seconds() < loop_interval:
                     self.logger.logger.info(f"Market closing soon ({remaining}). Skipping sleep.")
                     break
                 
@@ -98,16 +215,174 @@ class TradingSession:
         symbols = self.config.get("symbols", [])
         timeframe = self.config.get("timeframe", "5Min")
         lookback = self.config.get("lookback", 50)
+        scanner_cfg = self.config.get("scanner", {})
         
         # Check active positions for exits
         self._check_exits(account)
-        
-        # Scan for new signals
+
+        # Scan and rank symbols, then evaluate risk on top candidates.
+        ranked_candidates = self._scan_and_rank(symbols, timeframe, lookback, scanner_cfg)
+
+        for candidate in ranked_candidates:
+            symbol = candidate["symbol"]
+            signal = candidate["signal"]
+
+            self.logger.log_signal(symbol, signal)
+
+            # Evaluate risk
+            risk_config = self.config.get("risk", {})
+            risk_config["current_trades_today"] = self.trades_today
+            risk_config["current_open_risk"] = self.open_risk_dollars
+
+            risk_decision = evaluate_risk(account, signal, risk_config)
+
+            if not risk_decision.get("allowed"):
+                reason = risk_decision.get("reason", "Unknown reason")
+                self.logger.log_skip(symbol, reason)
+                continue
+
+            self._execute_buy(symbol, signal, risk_decision)
+
+    def _scan_and_rank(
+        self,
+        symbols: List[str],
+        timeframe: str,
+        lookback: int,
+        scanner_cfg: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        """Scan symbols, score BUY candidates, and return ranked top list."""
+        min_price = scanner_cfg.get("min_price")
+        max_price = scanner_cfg.get("max_price")
+        min_avg_volume = scanner_cfg.get("min_average_volume")
+        top_candidates = int(scanner_cfg.get("top_candidates", 20) or 20)
+
+        scored: List[Dict[str, Any]] = []
+        scanned = 0
+        buy_signals = 0
+
         for symbol in symbols:
+            scanned += 1
             try:
-                self._evaluate_symbol(symbol, timeframe, lookback, account)
+                bars = alpaca_client.get_bars(symbol, timeframe, lookback)
             except Exception as e:
-                self.logger.log_error(f"Error evaluating {symbol}: {e}", exc_info=e)
+                self.logger.log_error(f"Error fetching bars for {symbol}: {e}", exc_info=e)
+                continue
+
+            if not bars:
+                continue
+
+            last_close = float(bars[-1]["close"])
+            if min_price is not None and last_close < float(min_price):
+                continue
+            if max_price is not None and last_close > float(max_price):
+                continue
+
+            if min_avg_volume is not None:
+                recent_volumes = [float(b["volume"]) for b in bars[-20:]]
+                avg_volume = statistics.mean(recent_volumes) if recent_volumes else 0.0
+                if avg_volume < float(min_avg_volume):
+                    continue
+
+            signal = evaluate_strategy(bars, symbol, self.config.get("strategy", {}))
+            if signal.get("action") != "BUY":
+                continue
+
+            buy_signals += 1
+            score = self._score_candidate(signal, bars, scanner_cfg)
+            signal["score"] = round(score, 4)
+
+            scored.append({
+                "symbol": symbol,
+                "signal": signal,
+                "score": score,
+            })
+
+        scored.sort(key=lambda c: c["score"], reverse=True)
+        ranked = scored[:max(1, top_candidates)] if scored else []
+
+        self.logger.logger.info(
+            f"SCAN | scanned={scanned} buy_signals={buy_signals} selected={len(ranked)}"
+        )
+        if ranked:
+            preview = ", ".join([f"{c['symbol']}:{c['score']:.2f}" for c in ranked[:5]])
+            self.logger.logger.info(f"RANKED | top candidates: {preview}")
+
+        self._write_scanner_snapshot(scanned, buy_signals, ranked)
+
+        return ranked
+
+    def _write_scanner_snapshot(
+        self,
+        scanned: int,
+        buy_signals: int,
+        ranked: List[Dict[str, Any]],
+    ) -> None:
+        """Persist latest scanner/ranking result for UI visualization."""
+        try:
+            DATA_UI_DIR.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "scanned": scanned,
+                "buy_signals": buy_signals,
+                "selected": len(ranked),
+                "top": [
+                    {
+                        "symbol": c["symbol"],
+                        "score": round(float(c.get("score", 0.0)), 4),
+                        "confidence": c.get("signal", {}).get("confidence"),
+                        "entry_level": c.get("signal", {}).get("entry_level"),
+                        "stop_level": c.get("signal", {}).get("stop_level"),
+                        "target_level": c.get("signal", {}).get("target_level"),
+                        "volume_check": c.get("signal", {}).get("volume_check"),
+                    }
+                    for c in ranked
+                ],
+            }
+            SCANNER_SNAPSHOT_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception as e:
+            self.logger.log_error(f"Failed to write scanner snapshot: {e}")
+
+    def _score_candidate(self, signal: Dict[str, Any], bars: List[Dict[str, Any]], scanner_cfg: Dict[str, Any]) -> float:
+        """Score a BUY candidate for ranking.
+
+        Components:
+        - strategy confidence
+        - breakout strength above recent highs
+        - volume ratio on latest bar
+        - short-term momentum
+        """
+        confidence = float(signal.get("confidence", 0.0))
+        close = float(bars[-1]["close"])
+        weights = scanner_cfg.get("score_weights", {})
+        w_confidence = float(weights.get("confidence", 50.0))
+        w_breakout = float(weights.get("breakout", 200.0))
+        w_volume = float(weights.get("volume", 10.0))
+        w_momentum = float(weights.get("momentum", 100.0))
+        volume_ratio_cap = float(scanner_cfg.get("volume_ratio_cap", 5.0))
+
+        prev_highs = [float(b["high"]) for b in bars[-21:-1]] if len(bars) > 1 else [close]
+        resistance = max(prev_highs) if prev_highs else close
+        breakout_strength = max(0.0, (close - resistance) / resistance) if resistance > 0 else 0.0
+
+        prev_volumes = [float(b["volume"]) for b in bars[-21:-1]] if len(bars) > 1 else [1.0]
+        avg_volume = statistics.mean(prev_volumes) if prev_volumes else 1.0
+        curr_volume = float(bars[-1]["volume"])
+        volume_ratio = (curr_volume / avg_volume) if avg_volume > 0 else 1.0
+
+        momentum_period = min(10, len(bars) - 1)
+        if momentum_period > 0:
+            base_close = float(bars[-1 - momentum_period]["close"])
+            momentum = ((close - base_close) / base_close) if base_close > 0 else 0.0
+        else:
+            momentum = 0.0
+
+        score = (
+            confidence * w_confidence
+            + breakout_strength * w_breakout
+            + min(volume_ratio, volume_ratio_cap) * w_volume
+            + max(momentum, -0.2) * w_momentum
+        )
+        return score
     
     def _evaluate_symbol(self, symbol: str, timeframe: str, lookback: int,
                         account: Dict[str, Any]):
@@ -174,8 +449,26 @@ class TradingSession:
         }
         
         try:
-            # Submit order
-            order = submit_order(order_params, logger=self.logger)
+            # In dry-run mode, simulate a submitted order instead of calling the broker
+            if self.dry_run:
+                order = {
+                    "id": f"dryrun-{symbol}-{int(datetime.now().timestamp())}",
+                    "symbol": symbol,
+                    "qty": int(shares or 0),
+                    "side": "buy",
+                    "status": "simulated",
+                    "filled_qty": int(shares or 0),
+                    "filled_avg_price": float(entry_price) if entry_price is not None else None,
+                    "created_at": datetime.now().isoformat(),
+                    "type": "market",
+                }
+                self.logger.logger.info(
+                    f"DRY_RUN | Simulated BUY {symbol} qty={shares} entry={entry_price}"
+                )
+                self.logger.log_order(order)
+            else:
+                # Submit order
+                order = submit_order(order_params, logger=self.logger)
             order_id = order.get("id")
             
             # Track trade
@@ -208,8 +501,15 @@ class TradingSession:
         Args:
             account: Current account information
         """
-        positions = alpaca_client.get_open_positions()
-        position_map = {p["symbol"]: p for p in positions}
+        if self.dry_run:
+            position_map = {}
+            for symbol in self.active_trades.keys():
+                bars = alpaca_client.get_bars(symbol, self.config.get("timeframe", "5Min"), lookback=1)
+                if bars:
+                    position_map[symbol] = {"symbol": symbol, "current_price": bars[-1]["close"]}
+        else:
+            positions = alpaca_client.get_open_positions()
+            position_map = {p["symbol"]: p for p in positions}
         
         # Check each active trade
         symbols_to_remove = []
@@ -271,8 +571,13 @@ class TradingSession:
         pnl_pct = ((exit_price - entry_price) / entry_price) * 100 if entry_price > 0 else 0
         
         try:
-            # Close position
-            close_position(symbol, qty=shares, logger=self.logger)
+            # Close position unless we're simulating
+            if self.dry_run:
+                self.logger.logger.info(
+                    f"DRY_RUN | Simulated CLOSE {symbol} qty={shares} exit={exit_price} reason={reason}"
+                )
+            else:
+                close_position(symbol, qty=shares, logger=self.logger)
             
             # Log exit
             self.logger.log_exit(symbol, exit_price, pnl, pnl_pct,
@@ -306,19 +611,88 @@ class TradingSession:
                                self.session_pnl, win_rate)
         
         # Log final positions
-        try:
-            positions = alpaca_client.get_open_positions()
-            self.logger.log_positions(positions)
-        except Exception as e:
-            self.logger.log_error(f"Failed to fetch final positions: {e}")
+        if self.dry_run:
+            # In dry-run mode, broker positions are not modified by the session.
+            self.logger.log_positions([])
+        else:
+            try:
+                positions = alpaca_client.get_open_positions()
+                self.logger.log_positions(positions)
+            except Exception as e:
+                self.logger.log_error(f"Failed to fetch final positions: {e}")
         
         self.logger.logger.info("="*60)
         self.logger.logger.info("SESSION ENDED")
         self.logger.logger.info("="*60)
 
 
+def _run_smoke_test() -> int:
+    """Perform a one-shot Alpaca paper-account connectivity check."""
+    print("\n" + "="*60)
+    print("ALPACA PAPER ACCOUNT SMOKE TEST")
+    print("="*60)
+    print("This checks connectivity and data access without submitting orders.")
+
+    try:
+        account = alpaca_client.get_account()
+        print("✓ Connected to Alpaca account")
+        print(f"  Equity: ${account['equity']:,.2f}")
+        print(f"  Buying power: ${account['buying_power']:,.2f}")
+        print(f"  Status: {account['status']}")
+
+        bars = alpaca_client.get_bars("AAPL", "5Min", lookback=3)
+        print(f"✓ Retrieved {len(bars)} recent bars for AAPL")
+
+        positions = alpaca_client.get_open_positions()
+        print(f"✓ Retrieved {len(positions)} open positions")
+
+        return 0
+    except Exception as e:
+        print(f"✗ Smoke test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
+
+
 def main():
     """Main entry point."""
+    parser = argparse.ArgumentParser(description="Run the breakout trading bot")
+    parser.add_argument("--skip-market-check", action="store_true",
+                        help="Bypass market-hours checks for smoke testing")
+    parser.add_argument("--smoke-test", action="store_true",
+                        help="Test Alpaca paper account connectivity and exit")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Run strategy/risk loop without submitting live orders")
+    parser.add_argument("--max-loops", type=int, default=None,
+                        help="Limit strategy loop iterations (recommended with --dry-run)")
+    parser.add_argument("--symbols", type=str, default=None,
+                        help="Comma-separated symbols override (e.g., AAPL,MSFT,SPY)")
+    parser.add_argument("--append-symbols", action="store_true",
+                        help="Append --symbols to configured/universe symbols instead of replacing")
+    parser.add_argument("--symbol-universe", choices=["config", "us-all"], default="config",
+                        help="Symbol source: config list or all active tradeable US equities")
+    parser.add_argument("--max-symbols", type=int, default=200,
+                        help="Cap symbols when using --symbol-universe us-all (set <=0 for no cap)")
+    parser.add_argument("--top-candidates", type=int, default=None,
+                        help="Number of top ranked symbols to evaluate for entries each loop")
+    parser.add_argument("--min-price", type=float, default=None,
+                        help="Minimum last price filter for scanner")
+    parser.add_argument("--max-price", type=float, default=None,
+                        help="Maximum last price filter for scanner")
+    parser.add_argument("--min-average-volume", type=float, default=None,
+                        help="Minimum average volume filter (20-bar avg)")
+    parser.add_argument("--volume-ratio-cap", type=float, default=None,
+                        help="Cap applied to volume ratio term in scoring")
+    parser.add_argument("--weight-confidence", type=float, default=None,
+                        help="Score weight for signal confidence component")
+    parser.add_argument("--weight-breakout", type=float, default=None,
+                        help="Score weight for breakout-strength component")
+    parser.add_argument("--weight-volume", type=float, default=None,
+                        help="Score weight for volume-ratio component")
+    parser.add_argument("--weight-momentum", type=float, default=None,
+                        help="Score weight for momentum component")
+    args = parser.parse_args()
+
     print("\n" + "="*60)
     print("BREAKOUT TRADING BOT")
     print("="*60)
@@ -327,25 +701,64 @@ def main():
         # Load configuration
         print("Loading configuration...")
         config = utils.load_config()
+
+        max_symbols = args.max_symbols if args.max_symbols and args.max_symbols > 0 else None
+        resolved_symbols = _resolve_symbols(
+            config,
+            symbol_universe=args.symbol_universe,
+            symbols_csv=args.symbols,
+            append_symbols=args.append_symbols,
+            max_symbols=max_symbols,
+        )
+        config["symbols"] = resolved_symbols
+        scanner_cfg = _resolve_scanner_config(config, args)
+
         print(f"✓ Config loaded")
-        print(f"  Symbols: {config.get('symbols')}")
+        print(f"  Symbols ({len(config.get('symbols', []))}): {config.get('symbols')[:10]}")
+        if len(config.get("symbols", [])) > 10:
+            print("  ... (truncated preview)")
+        print(f"  Scanner top candidates: {scanner_cfg.get('top_candidates')}")
+        if scanner_cfg.get("min_price") is not None or scanner_cfg.get("max_price") is not None:
+            print(f"  Price filter: {scanner_cfg.get('min_price')} - {scanner_cfg.get('max_price')}")
+        if scanner_cfg.get("min_average_volume") is not None:
+            print(f"  Min avg volume: {scanner_cfg.get('min_average_volume')}")
+        print(f"  Volume ratio cap: {scanner_cfg.get('volume_ratio_cap')}")
+        print(f"  Score weights: {scanner_cfg.get('score_weights')}")
         print(f"  Timeframe: {config.get('timeframe')}")
         print(f"  Max trades/day: {config.get('risk', {}).get('max_trades_per_day')}")
+
+        if args.smoke_test:
+            return _run_smoke_test()
         
         # Check if market is open
         print(f"\nChecking market status...")
         now = utils.now_market()
         print(f"  Current time: {now}")
-        print(f"  Market open: {utils.is_market_open()}")
+        market_open = utils.is_market_open()
+        print(f"  Market open: {market_open}")
         
-        if not utils.is_market_open():
+        if not args.skip_market_check and not market_open:
             next_open = utils.next_market_open()
             print(f"\n✗ Market is closed. Next open: {next_open}")
             return 1
+        if args.skip_market_check and not market_open:
+            print("\n! Market check bypassed. Running session anyway.")
         
         # Start trading session
-        print(f"\n✓ Market is open. Starting trading session...")
-        session = TradingSession(config)
+        if args.dry_run:
+            print("\n✓ Dry-run mode enabled. Orders will be simulated only.")
+        if args.max_loops is not None:
+            if args.max_loops < 1:
+                print("\n✗ --max-loops must be >= 1")
+                return 1
+            print(f"✓ Loop limit: {args.max_loops}")
+        print("\n✓ Starting trading session...")
+        session = TradingSession(
+            config,
+            dry_run=args.dry_run,
+            max_loops=args.max_loops,
+            bypass_market_hours=args.skip_market_check,
+        )
         session.run()
         
         return 0

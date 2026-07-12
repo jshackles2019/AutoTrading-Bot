@@ -14,11 +14,13 @@ except Exception:
     def load_dotenv():
         return
 from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import GetAssetsRequest
 from alpaca.trading.requests import MarketOrderRequest, LimitOrderRequest
-from alpaca.trading.enums import OrderSide, TimeInForce
+from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass, AssetStatus
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
-from alpaca.data.enums import Adjustment
+from alpaca.data.enums import Adjustment, DataFeed
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 
 load_dotenv()
 
@@ -32,7 +34,11 @@ if not ALPACA_KEY or not ALPACA_SECRET:
 
 # Initialize clients
 trading_client = TradingClient(ALPACA_KEY, ALPACA_SECRET, paper=ALPACA_PAPER)
-data_client = StockHistoricalDataClient(ALPACA_KEY, ALPACA_SECRET)
+data_client = StockHistoricalDataClient(
+    ALPACA_KEY,
+    ALPACA_SECRET,
+    raw_data=False,
+)
 
 
 def get_account() -> Dict[str, Any]:
@@ -55,6 +61,37 @@ def get_account() -> Dict[str, Any]:
         raise RuntimeError(f"Failed to fetch account info: {e}")
 
 
+def get_tradeable_us_symbols(max_symbols: Optional[int] = None) -> List[str]:
+    """Fetch active tradable US equity symbols from Alpaca assets API.
+
+    Args:
+        max_symbols: Optional cap on number of symbols returned.
+
+    Returns:
+        Sorted list of ticker symbols.
+    """
+    try:
+        request = GetAssetsRequest(
+            status=AssetStatus.ACTIVE,
+            asset_class=AssetClass.US_EQUITY,
+        )
+        assets = trading_client.get_all_assets(request)
+
+        symbols: List[str] = []
+        for asset in assets:
+            if getattr(asset, "tradable", False):
+                symbol = getattr(asset, "symbol", None)
+                if symbol:
+                    symbols.append(symbol)
+
+        symbols = sorted(set(symbols))
+        if max_symbols is not None and max_symbols > 0:
+            symbols = symbols[:max_symbols]
+        return symbols
+    except Exception as e:
+        raise RuntimeError(f"Failed to fetch US symbols: {e}")
+
+
 def get_bars(symbol: str, timeframe: str, lookback: int = 50) -> List[Dict[str, Any]]:
     """Fetch OHLCV bars for a symbol.
     
@@ -69,15 +106,20 @@ def get_bars(symbol: str, timeframe: str, lookback: int = 50) -> List[Dict[str, 
     try:
         # Map timeframe string to alpaca-py TimeFrame enum
         timeframe_map = {
-            "1Min": "1m",
-            "5Min": "5m",
-            "15Min": "15m",
-            "30Min": "30m",
-            "1Hour": "1h",
-            "1Day": "1d",
+            "1Min": TimeFrame(1, TimeFrameUnit.Minute),
+            "5Min": TimeFrame(5, TimeFrameUnit.Minute),
+            "15Min": TimeFrame(15, TimeFrameUnit.Minute),
+            "30Min": TimeFrame(30, TimeFrameUnit.Minute),
+            "1Hour": TimeFrame(1, TimeFrameUnit.Hour),
+            "1Day": TimeFrame(1, TimeFrameUnit.Day),
         }
-        
-        tf = timeframe_map.get(timeframe, timeframe)
+
+        tf = timeframe_map.get(timeframe)
+        if tf is None:
+            if isinstance(timeframe, TimeFrame):
+                tf = timeframe
+            else:
+                raise ValueError(f"Unsupported timeframe: {timeframe}")
         
         # Calculate start time (go back further to account for missing data)
         end_time = datetime.utcnow()
@@ -90,6 +132,7 @@ def get_bars(symbol: str, timeframe: str, lookback: int = 50) -> List[Dict[str, 
             start=start_time,
             end=end_time,
             adjustment=Adjustment.RAW,
+            feed=DataFeed.IEX,
         )
         
         bars_data = data_client.get_stock_bars(request)

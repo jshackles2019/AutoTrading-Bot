@@ -12,3 +12,15 @@ risk:
   max_risk_pct: 0.01   # 1% of equity
   max_trades_per_day: 3
   volume_threshold_factor: 1.5
+
+scanner:
+  top_candidates: 20
+  min_price: null
+  max_price: null
+  min_average_volume: null
+  volume_ratio_cap: 5.0
+  score_weights:
+    confidence: 50.0
+    breakout: 200.0
+    volume: 10.0
+    momentum: 100.0
