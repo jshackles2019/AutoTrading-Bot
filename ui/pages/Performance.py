@@ -11,9 +11,18 @@ import altair as alt
 import pandas as pd
 import streamlit as st
 
+try:
+    from dotenv import load_dotenv
+except Exception:
+    def load_dotenv(*args, **kwargs):
+        return False
+
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA_TRADES = ROOT / "data" / "trades"
+
+# Ensure UI pages can read repo-level .env configuration when launched via Streamlit.
+load_dotenv(ROOT / ".env", override=False)
 
 
 @st.cache_data(ttl=300)
