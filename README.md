@@ -32,7 +32,7 @@ Set `ALPACA_PAPER=False` only when you intentionally want live trading mode.
 Discord notifications are optional:
 - `DISCORD_WEBHOOK_URL`: Discord incoming webhook URL
 - `DISCORD_NOTIFY_EVENTS`: comma-separated event keys to send (optional)
-  - Python defaults: `circuit_halt,fatal_error,session_summary,watchdog_restart,watchdog_stop`
+  - Python defaults: `circuit_halt,fatal_error,reconciliation_mismatch,session_summary,watchdog_restart,watchdog_stop`
   - Watchdog defaults when unset: `watchdog_restart,watchdog_stop`
 
 Update `config/settings.yaml` for symbols/timeframe/risk values.
@@ -229,6 +229,11 @@ Runtime breaker context persistence:
 - `consecutive_losses` and `symbol_cooldowns` are persisted in `data/ui/runtime_status.json` and restored on restart.
 - This keeps breaker protections active across watchdog/bot restarts.
 
+Startup reconciliation safe mode:
+- On session start, broker open positions are reconciled against locally tracked active positions.
+- If they do not match, bot enters safe-mode entry lockout (no new entries) and writes lockout state to `data/ui/runtime_status.json`.
+- Lockout can be acknowledged/reset from Home UI (`Acknowledge/Reset Halt`) after manual review.
+
 Runtime reset controls:
 - UI Home page provides:
   - `Acknowledge/Reset Halt`
@@ -240,6 +245,7 @@ Runtime reset controls:
 Notification event keys:
 - `circuit_halt`: circuit breaker halts a session
 - `fatal_error`: unhandled runtime failure in trading loop
+- `reconciliation_mismatch`: startup position reconciliation mismatch triggers safe-mode entry lockout
 - `session_summary`: session summary posted at session close
 - `watchdog_restart`: watchdog restarting bot after non-zero exit
 - `watchdog_stop`: watchdog stops (clean exit, stop flag, breaker-halt, or max restarts)

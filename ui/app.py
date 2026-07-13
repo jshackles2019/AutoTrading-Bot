@@ -1019,6 +1019,11 @@ with left:
             st.error(f"Halt reason: {runtime_status.get('halt_reason')}")
         if runtime_status.get("message"):
             st.write(f"Runtime note: {runtime_status.get('message')}")
+        if runtime_status.get("entry_lockout"):
+            st.warning(
+                "Safe-mode entry lockout is active. "
+                f"Reason: {runtime_status.get('entry_lockout_reason', 'Startup reconciliation mismatch')}."
+            )
 
         c1, c2, c3 = st.columns(3)
         c1.metric("Consecutive Losses", int(runtime_status.get("consecutive_losses", 0)))

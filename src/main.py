@@ -231,6 +231,8 @@ class TradingSession:
         self._rng = random.Random()
         self.symbol_cooldowns: Dict[str, float] = {}
         self.halt_reason: Optional[str] = None
+        self.entry_lockout = False
+        self.entry_lockout_reason: Optional[str] = None
 
         risk_cfg = self.config.get("risk", {})
         self.max_daily_drawdown_pct = risk_cfg.get("max_daily_drawdown_pct")
@@ -257,6 +259,8 @@ class TradingSession:
 
         self.consecutive_losses = int(payload.get("consecutive_losses", self.consecutive_losses) or 0)
         self.session_start_equity = payload.get("session_start_equity", self.session_start_equity)
+        self.entry_lockout = bool(payload.get("entry_lockout", False))
+        self.entry_lockout_reason = payload.get("entry_lockout_reason")
 
         cooldowns = payload.get("symbol_cooldowns")
         if isinstance(cooldowns, dict):
@@ -274,19 +278,53 @@ class TradingSession:
         """Reset persisted runtime breaker context, optionally clearing symbol cooldowns."""
         self.consecutive_losses = 0
         self.halt_reason = None
+        self.entry_lockout = False
+        self.entry_lockout_reason = None
         if clear_cooldowns:
             self.symbol_cooldowns = {}
         self._write_runtime_status("reset", "Runtime context reset")
+
+    def _set_entry_lockout(self, reason: str) -> None:
+        """Activate safe-mode lockout that blocks new entries until reset/reconciliation."""
+        self.entry_lockout = True
+        self.entry_lockout_reason = reason
+        self.logger.logger.error(f"SAFE MODE LOCKOUT | {reason}")
+        self._write_runtime_status("safe_mode_lockout", reason)
+        notify_discord(
+            "reconciliation_mismatch",
+            reason,
+            title="Breakout Bot Startup Reconciliation Mismatch",
+        )
+
+    def _perform_startup_reconciliation(self) -> None:
+        """Reconcile broker positions against local tracked state before enabling entries."""
+        try:
+            broker_positions = alpaca_client.get_open_positions()
+        except Exception as e:
+            self._set_entry_lockout(f"Unable to reconcile broker positions at startup: {e}")
+            return
+
+        broker_symbols = {str(pos.get("symbol", "")).upper() for pos in broker_positions if pos.get("symbol")}
+        local_symbols = {str(symbol).upper() for symbol in self.active_trades.keys()}
+
+        if broker_symbols != local_symbols:
+            self._set_entry_lockout(
+                "Startup reconciliation mismatch detected. "
+                f"Broker symbols={sorted(broker_symbols)} | "
+                f"Local tracked symbols={sorted(local_symbols)}"
+            )
 
     def _write_runtime_status(self, status: str, message: str, account_equity: Optional[float] = None) -> None:
         """Persist runtime/circuit-breaker status for the UI."""
         try:
             DATA_UI_DIR.mkdir(parents=True, exist_ok=True)
             payload = {
-                "status": status,
+                "status": "safe_mode_lockout" if self.entry_lockout and status == "running" else status,
                 "updated_at": datetime.now().isoformat(timespec="seconds"),
                 "message": message,
                 "halt_reason": self.halt_reason,
+                "entry_lockout": bool(self.entry_lockout),
+                "entry_lockout_reason": self.entry_lockout_reason,
                 "session_start": self.session_start.isoformat(timespec="seconds"),
                 "session_start_equity": self.session_start_equity,
                 "account_equity": account_equity,
@@ -378,6 +416,12 @@ class TradingSession:
             self.session_start_equity = float(account.get("equity", 0.0) or 0.0)
             self.logger.logger.info(f"Account equity: ${account['equity']:,.2f}")
             self.logger.logger.info(f"Buying power: ${account['buying_power']:,.2f}")
+            self._perform_startup_reconciliation()
+            if self.entry_lockout and self.entry_lockout_reason:
+                self.logger.logger.warning(
+                    "Entry lockout active from startup reconciliation. "
+                    "New entries are blocked until reset and symbol state alignment."
+                )
             
             # Main loop
             loop_count = 0
@@ -490,6 +534,10 @@ class TradingSession:
             risk_config["current_time"] = datetime.now().timestamp()
 
             risk_decision = evaluate_risk(account, signal, risk_config)
+
+            if self.entry_lockout:
+                self.logger.log_skip(symbol, self.entry_lockout_reason or "Safe-mode entry lockout active")
+                continue
 
             if not risk_decision.get("allowed"):
                 reason = risk_decision.get("reason", "Unknown reason")
