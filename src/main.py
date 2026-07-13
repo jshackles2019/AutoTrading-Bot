@@ -340,13 +340,14 @@ class TradingSession:
         lookback: int,
         scanner_cfg: Dict[str, Any],
     ) -> List[Dict[str, Any]]:
-        """Scan symbols, score BUY candidates, and return ranked top list."""
+        """Scan symbols, score candidates, and return ranked BUY list for execution."""
         min_price = scanner_cfg.get("min_price")
         max_price = scanner_cfg.get("max_price")
         min_avg_volume = scanner_cfg.get("min_average_volume")
         top_candidates = int(scanner_cfg.get("top_candidates", 20) or 20)
 
-        scored: List[Dict[str, Any]] = []
+        scored_buy: List[Dict[str, Any]] = []
+        scored_all: List[Dict[str, Any]] = []
         scanned = 0
         buy_signals = 0
 
@@ -378,38 +379,46 @@ class TradingSession:
                     continue
 
             signal = evaluate_strategy(bars, symbol, self.config.get("strategy", {}))
-            if signal.get("action") != "BUY":
-                continue
-
-            buy_signals += 1
             score = self._score_candidate(signal, bars, scanner_cfg)
             signal["score"] = round(score, 4)
 
-            scored.append({
+            scored_row = {
                 "symbol": symbol,
                 "signal": signal,
                 "score": score,
-            })
+            }
+            scored_all.append(scored_row)
 
-        scored.sort(key=lambda c: c["score"], reverse=True)
-        ranked = scored[:max(1, top_candidates)] if scored else []
+            if signal.get("action") == "BUY":
+                buy_signals += 1
+                scored_buy.append(scored_row)
+
+        scored_buy.sort(key=lambda c: c["score"], reverse=True)
+        ranked_buy = scored_buy[:max(1, top_candidates)] if scored_buy else []
+
+        scored_all.sort(key=lambda c: c["score"], reverse=True)
+        ranked_analyzed = scored_all[:max(1, top_candidates)] if scored_all else []
 
         self.logger.logger.info(
-            f"SCAN | scanned={scanned} buy_signals={buy_signals} selected={len(ranked)}"
+            f"SCAN | scanned={scanned} buy_signals={buy_signals} selected={len(ranked_buy)}"
         )
-        if ranked:
-            preview = ", ".join([f"{c['symbol']}:{c['score']:.2f}" for c in ranked[:5]])
-            self.logger.logger.info(f"RANKED | top candidates: {preview}")
+        if ranked_analyzed:
+            preview = ", ".join([f"{c['symbol']}:{c['score']:.2f}" for c in ranked_analyzed[:5]])
+            self.logger.logger.info(f"RANKED | analyzed top candidates: {preview}")
+        if ranked_buy:
+            preview_buy = ", ".join([f"{c['symbol']}:{c['score']:.2f}" for c in ranked_buy[:5]])
+            self.logger.logger.info(f"RANKED | buy candidates: {preview_buy}")
 
-        self._write_scanner_snapshot(scanned, buy_signals, ranked)
+        self._write_scanner_snapshot(scanned, buy_signals, ranked_buy, ranked_analyzed)
 
-        return ranked
+        return ranked_buy
 
     def _write_scanner_snapshot(
         self,
         scanned: int,
         buy_signals: int,
-        ranked: List[Dict[str, Any]],
+        ranked_buy: List[Dict[str, Any]],
+        ranked_analyzed: List[Dict[str, Any]],
     ) -> None:
         """Persist latest scanner/ranking result for UI visualization."""
         try:
@@ -418,18 +427,32 @@ class TradingSession:
                 "timestamp": datetime.now().isoformat(timespec="seconds"),
                 "scanned": scanned,
                 "buy_signals": buy_signals,
-                "selected": len(ranked),
+                "selected": len(ranked_buy),
                 "top": [
                     {
                         "symbol": c["symbol"],
                         "score": round(float(c.get("score", 0.0)), 4),
+                        "action": c.get("signal", {}).get("action", "NONE"),
                         "confidence": c.get("signal", {}).get("confidence"),
                         "entry_level": c.get("signal", {}).get("entry_level"),
                         "stop_level": c.get("signal", {}).get("stop_level"),
                         "target_level": c.get("signal", {}).get("target_level"),
                         "volume_check": c.get("signal", {}).get("volume_check"),
                     }
-                    for c in ranked
+                    for c in ranked_buy
+                ],
+                "top_analyzed": [
+                    {
+                        "symbol": c["symbol"],
+                        "score": round(float(c.get("score", 0.0)), 4),
+                        "action": c.get("signal", {}).get("action", "NONE"),
+                        "confidence": c.get("signal", {}).get("confidence"),
+                        "entry_level": c.get("signal", {}).get("entry_level"),
+                        "stop_level": c.get("signal", {}).get("stop_level"),
+                        "target_level": c.get("signal", {}).get("target_level"),
+                        "volume_check": c.get("signal", {}).get("volume_check"),
+                    }
+                    for c in ranked_analyzed
                 ],
             }
             SCANNER_SNAPSHOT_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")

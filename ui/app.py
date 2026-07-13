@@ -710,16 +710,22 @@ with right:
         snapshot = _load_scanner_snapshot()
         if snapshot:
             st.caption(f"Updated: {snapshot.get('timestamp', 'N/A')}")
-            m1, m2, m3 = st.columns(3)
+            m1, m2, m3, m4 = st.columns(4)
             m1.metric("Scanned", int(snapshot.get("scanned", 0)))
             m2.metric("Buy Signals", int(snapshot.get("buy_signals", 0)))
             m3.metric("Selected", int(snapshot.get("selected", 0)))
+            m4.metric("Top Analyzed", int(len(snapshot.get("top_analyzed", []))))
 
             top_rows = snapshot.get("top", [])
             if top_rows:
                 st.dataframe(pd.DataFrame(top_rows), use_container_width=True)
             else:
-                st.info("No ranked candidates in latest snapshot.")
+                analyzed_rows = snapshot.get("top_analyzed", [])
+                if analyzed_rows:
+                    st.info("No BUY candidates in latest snapshot. Showing top analyzed symbols.")
+                    st.dataframe(pd.DataFrame(analyzed_rows), use_container_width=True)
+                else:
+                    st.info("No ranked candidates in latest snapshot.")
         else:
             st.info("No scanner snapshot found yet.")
 
