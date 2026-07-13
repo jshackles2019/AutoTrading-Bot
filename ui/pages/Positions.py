@@ -60,6 +60,14 @@ def _positions_snapshot(account_mode: str) -> tuple[pd.DataFrame, Optional[str]]
         return pd.DataFrame(), str(exc)
 
 
+def _format_status(value: object) -> str:
+    text = str(value) if value is not None else "Unavailable"
+    if "." in text:
+        text = text.split(".")[-1]
+    text = text.replace("_", " ").strip().title()
+    return text or "Unavailable"
+
+
 st.set_page_config(page_title="Positions", page_icon="bar_chart", layout="wide")
 st.title("Positions Dashboard")
 st.caption("View current open positions for the selected account mode.")
@@ -84,14 +92,20 @@ if refresh:
 
 account, account_err = _account_snapshot(account_mode)
 if account_err:
-    st.warning(f"Account fetch failed: {account_err}")
+    if account_mode == "live" and "not authorized" in account_err.lower():
+        st.info(
+            "Live account is not authorized with the current API keys. "
+            "Use live keys for live mode, or switch back to paper mode."
+        )
+    else:
+        st.warning(f"Account fetch failed: {account_err}")
 
 metric1, metric2, metric3, metric4 = st.columns(4)
 if account:
     metric1.metric("Mode", account_mode.upper())
     metric2.metric("Equity", f"${account.get('equity', 0):,.2f}")
     metric3.metric("Buying Power", f"${account.get('buying_power', 0):,.2f}")
-    metric4.metric("Status", str(account.get("status", "UNKNOWN")))
+    metric4.metric("Status", _format_status(account.get("status", "Unavailable")))
 else:
     metric1.metric("Mode", account_mode.upper())
     metric2.metric("Equity", "N/A")
@@ -100,7 +114,12 @@ else:
 
 positions_df, positions_err = _positions_snapshot(account_mode)
 if positions_err:
-    st.error(f"Positions fetch failed: {positions_err}")
+    if account_mode == "live" and "not authorized" in positions_err.lower():
+        st.info(
+            "Live positions are unavailable because the current API keys are not authorized for live mode."
+        )
+    else:
+        st.error(f"Positions fetch failed: {positions_err}")
 elif positions_df.empty:
     st.info("No open positions for this account.")
 else:

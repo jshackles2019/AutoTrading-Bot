@@ -7,6 +7,7 @@ manages risk, and executes trades during market hours.
 
 import argparse
 import json
+import os
 import random
 import time
 import sys
@@ -33,6 +34,33 @@ except ImportError:
 DATA_UI_DIR = Path(__file__).resolve().parents[1] / "data" / "ui"
 SCANNER_SNAPSHOT_PATH = DATA_UI_DIR / "scanner_snapshot.json"
 STOP_SCANS_FLAG_PATH = DATA_UI_DIR / "stop_scans.flag"
+ACTIVE_BOT_PROCESS_PATH = DATA_UI_DIR / "active_bot_process.json"
+
+
+def _write_active_bot_process_state() -> None:
+    """Persist active bot PID so operators can detect/stop rogue runs."""
+    try:
+        DATA_UI_DIR.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "pid": os.getpid(),
+            "started_at": datetime.now().isoformat(timespec="seconds"),
+            "entry": str(Path(__file__).resolve()),
+        }
+        ACTIVE_BOT_PROCESS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+
+def _clear_active_bot_process_state() -> None:
+    """Remove active bot PID file when this process exits."""
+    try:
+        if not ACTIVE_BOT_PROCESS_PATH.exists():
+            return
+        payload = json.loads(ACTIVE_BOT_PROCESS_PATH.read_text(encoding="utf-8"))
+        if int(payload.get("pid", -1)) == os.getpid():
+            ACTIVE_BOT_PROCESS_PATH.unlink(missing_ok=True)
+    except Exception:
+        pass
 
 
 def _parse_symbols(symbols_csv: Optional[str]) -> List[str]:
@@ -170,6 +198,7 @@ class TradingSession:
     
     def run(self):
         """Run the main trading loop."""
+        _write_active_bot_process_state()
         self.logger.logger.info("="*60)
         self.logger.logger.info("TRADING SESSION STARTED")
         if self.dry_run:
@@ -224,6 +253,7 @@ class TradingSession:
             self.logger.log_error(f"Fatal error in trading loop: {e}", exc_info=e)
         finally:
             self._close_session()
+            _clear_active_bot_process_state()
     
     def _loop_iteration(self, account: Dict[str, Any]):
         """Execute one iteration of the trading loop.

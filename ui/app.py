@@ -28,6 +28,7 @@ BG_OUTPUT_FILE = DATA_LOGS / "background_runner.log"
 SCANNER_SNAPSHOT_FILE = DATA_UI / "scanner_snapshot.json"
 STOP_SCANS_FLAG_FILE = DATA_UI / "stop_scans.flag"
 SRC_MAIN = ROOT / "src" / "main.py"
+REPO_PROCESS_HELPER = ROOT / "scripts" / "repo_processes.ps1"
 
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -118,6 +119,23 @@ def _clear_application_logs() -> tuple[int, int]:
         except Exception:
             failed += 1
     return truncated, failed
+
+
+def _run_repo_process_helper(action: str) -> tuple[int, str, str]:
+    if not REPO_PROCESS_HELPER.exists():
+        return 1, "", f"Missing helper script: {REPO_PROCESS_HELPER}"
+
+    cmd = [
+        "powershell",
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        str(REPO_PROCESS_HELPER),
+        action,
+    ]
+    result = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True)
+    return result.returncode, result.stdout.strip(), result.stderr.strip()
 
 
 def _pid_running(pid: int) -> bool:
@@ -264,6 +282,14 @@ def _account_snapshot(account_mode: str) -> tuple[Optional[dict], Optional[str]]
         return account, None
     except Exception as exc:
         return None, str(exc)
+
+
+def _format_status(value: object) -> str:
+    text = str(value) if value is not None else "Unavailable"
+    if "." in text:
+        text = text.split(".")[-1]
+    text = text.replace("_", " ").strip().title()
+    return text or "Unavailable"
 
 
 st.title("Breakout Trading Bot")
@@ -464,6 +490,43 @@ with left:
             else:
                 st.warning(f"Cleared {truncated} log file(s), failed on {failed} file(s).")
 
+    st.caption("Rogue process tools")
+    proc_list_col, proc_kill_col = st.columns(2)
+    with proc_list_col:
+        list_rogue_clicked = st.button("List Rogue Processes", use_container_width=True)
+    with proc_kill_col:
+        kill_rogue_clicked = st.button("Kill Rogue Processes", use_container_width=True)
+
+    if list_rogue_clicked:
+        rc, out, err = _run_repo_process_helper("-List")
+        st.session_state["process_tool_output"] = {
+            "action": "List",
+            "rc": rc,
+            "out": out,
+            "err": err,
+        }
+
+    if kill_rogue_clicked:
+        rc, out, err = _run_repo_process_helper("-Kill")
+        st.session_state["process_tool_output"] = {
+            "action": "Kill",
+            "rc": rc,
+            "out": out,
+            "err": err,
+        }
+
+    process_tool_output = st.session_state.get("process_tool_output")
+    if process_tool_output:
+        rc_color = "green" if process_tool_output.get("rc", 1) == 0 else "red"
+        st.markdown(
+            f"**Process tool:** {process_tool_output.get('action', 'Unknown')}  \n"
+            f"**Exit code:** :{rc_color}[{process_tool_output.get('rc', 'N/A')}]"
+        )
+        if process_tool_output.get("out"):
+            st.text_area("process-tool-stdout", process_tool_output["out"], height=120)
+        if process_tool_output.get("err"):
+            st.text_area("process-tool-stderr", process_tool_output["err"], height=100)
+
     if start_bg_clicked:
         if _is_bg_running():
             st.warning("Background process is already running.")
@@ -608,7 +671,7 @@ with right:
         if account:
             card1.metric("Equity", f"${account.get('equity', 0):,.2f}")
             card2.metric("Buying Power", f"${account.get('buying_power', 0):,.2f}")
-            card3.metric("Status", str(account.get("status", "UNKNOWN")))
+            card3.metric("Status", _format_status(account.get("status", "Unavailable")))
         else:
             card1.metric("Equity", "N/A")
             card2.metric("Buying Power", "N/A")

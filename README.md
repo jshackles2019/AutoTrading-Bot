@@ -173,6 +173,26 @@ The script sets `ALPACA_PAPER` automatically per run:
 - `-AccountMode live` => `ALPACA_PAPER=False`
 - Non-dry-run live mode requires: `-LiveConfirmToken LIVE-TRADE-YES`
 
+### Check/kill rogue repo processes
+
+List repo-scoped Python processes:
+
+```powershell
+./scripts/repo_processes.ps1 -List
+```
+
+Kill repo-scoped Python processes:
+
+```powershell
+./scripts/repo_processes.ps1 -Kill
+```
+
+Optional: target another process name:
+
+```powershell
+./scripts/repo_processes.ps1 -List -ProcessName "streamlit.exe"
+```
+
 ## Streamlit UI
 
 Run dashboard:
@@ -307,6 +327,6 @@ C:/Users/John/AppData/Local/Python/pythoncore-3.14-64/python.exe -m pytest -q te
 
 - `src/`: bot logic, Alpaca client, strategy, risk, logging, executor
 - `config/settings.yaml`: runtime configuration
-- `ui/app.py`: Streamlit dashboard
+- `ui/Home.py`: Streamlit dashboard home page
 - `data/logs/`: bot/background logs
 - `data/trades/`: CSV trade journal output

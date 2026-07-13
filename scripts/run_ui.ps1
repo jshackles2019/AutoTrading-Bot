@@ -32,10 +32,10 @@ if ([string]::IsNullOrWhiteSpace($resolvedAddress) -or $resolvedAddress -in @("a
     }
 }
 
-$args = @("-m", "streamlit", "run", "ui/app.py", "--server.address", "$resolvedAddress", "--server.port", "$Port")
+$streamlitArgs = @("-m", "streamlit", "run", "ui/Home.py", "--server.address", "$resolvedAddress", "--server.port", "$Port")
 if ($Headless) {
-    $args += @("--server.headless", "true")
+    $streamlitArgs += @("--server.headless", "true")
 }
 
 Write-Host "Starting Streamlit UI on $resolvedAddress`:$Port..."
-& $python @args
+& $python @streamlitArgs

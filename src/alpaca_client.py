@@ -49,13 +49,25 @@ def get_account() -> Dict[str, Any]:
     """
     try:
         account = trading_client.get_account()
+        status_raw = getattr(account, "status", None)
+        if hasattr(status_raw, "value"):
+            status_value = str(status_raw.value)
+        elif status_raw is None:
+            status_value = "UNAVAILABLE"
+        else:
+            status_value = str(status_raw)
+
+        if "." in status_value:
+            status_value = status_value.split(".")[-1]
+        status_value = status_value.replace("_", " ").strip().title() or "Unavailable"
+
         return {
             "equity": float(account.equity),
             "cash": float(account.cash),
             "buying_power": float(account.buying_power),
             "multiplier": int(account.multiplier),
             "portfolio_value": float(account.portfolio_value),
-            "status": account.status,
+            "status": status_value,
         }
     except Exception as e:
         raise RuntimeError(f"Failed to fetch account info: {e}")
@@ -328,11 +340,31 @@ def get_open_positions() -> List[Dict[str, Any]]:
         
         result = []
         for pos in positions:
+            entry_price_value = getattr(pos, "avg_entry_price", None)
+            if entry_price_value is None:
+                # Fallback for SDK/model differences where avg_entry_price is absent.
+                cost_basis_value = getattr(pos, "cost_basis", None)
+                qty_for_basis = getattr(pos, "qty", None)
+                try:
+                    if cost_basis_value is not None and qty_for_basis is not None and float(qty_for_basis) != 0.0:
+                        entry_price_value = float(cost_basis_value) / float(qty_for_basis)
+                except Exception:
+                    entry_price_value = None
+
+            side_obj = getattr(pos, "side", None)
+            side_value = side_obj.value if hasattr(side_obj, "value") else str(side_obj)
+
+            qty_value = getattr(pos, "qty", 0)
+            try:
+                normalized_qty = float(qty_value)
+            except Exception:
+                normalized_qty = 0.0
+
             result.append({
                 "symbol": pos.symbol,
-                "qty": int(pos.qty),
-                "side": pos.side.value,
-                "entry_price": float(pos.avg_fill_price),
+                "qty": normalized_qty,
+                "side": side_value,
+                "entry_price": float(entry_price_value) if entry_price_value is not None else None,
                 "current_price": float(pos.current_price),
                 "unrealized_pl": float(pos.unrealized_pl),
                 "unrealized_plpc": float(pos.unrealized_plpc),
