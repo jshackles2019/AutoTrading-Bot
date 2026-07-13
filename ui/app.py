@@ -281,10 +281,14 @@ left, right = st.columns([1.2, 2.0])
 
 with left:
     st.subheader("Controls")
+    if "account_mode" not in st.session_state:
+        st.session_state["account_mode"] = _default_account_mode()
+
     account_mode = st.selectbox(
         "Account mode",
         options=["paper", "live"],
-        index=0 if _default_account_mode() == "paper" else 1,
+        index=0 if st.session_state["account_mode"] == "paper" else 1,
+        key="account_mode",
         help="Select which Alpaca account mode to use for this run.",
     )
 
