@@ -32,7 +32,7 @@ Set `ALPACA_PAPER=False` only when you intentionally want live trading mode.
 Discord notifications are optional:
 - `DISCORD_WEBHOOK_URL`: Discord incoming webhook URL
 - `DISCORD_NOTIFY_EVENTS`: comma-separated event keys to send (optional)
-  - Python defaults: `circuit_halt,fatal_error,reconciliation_mismatch,session_summary,watchdog_restart,watchdog_stop`
+  - Python defaults: `circuit_halt,fatal_error,reconciliation_mismatch,schedule_block,session_summary,watchdog_restart,watchdog_stop`
   - Watchdog defaults when unset: `watchdog_restart,watchdog_stop`
 
 Update `config/settings.yaml` for symbols/timeframe/risk values.
@@ -230,6 +230,11 @@ Runtime breaker context persistence:
 - `consecutive_losses` and `symbol_cooldowns` are persisted in `data/ui/runtime_status.json` and restored on restart.
 - This keeps breaker protections active across watchdog/bot restarts.
 
+Strict trading schedule gate:
+- Configured under `automation.trading_window` in `config/settings.yaml`.
+- Default window is Mon-Fri 09:30-16:00 America/New_York and is enabled by default.
+- Bot will stop/avoid starting trading loops outside this window even when market checks are bypassed.
+
 Startup reconciliation safe mode:
 - On session start, broker open positions are reconciled against locally tracked active positions.
 - If they do not match, bot enters safe-mode entry lockout (no new entries) and writes lockout state to `data/ui/runtime_status.json`.
@@ -243,10 +248,18 @@ Runtime reset controls:
   - `--reset-runtime-status`
   - `--reset-runtime-clear-cooldowns` (used with `--reset-runtime-status`)
 
+Schedule gate CLI overrides:
+- `--schedule-enabled`
+- `--schedule-disabled`
+- `--schedule-start HH:MM`
+- `--schedule-end HH:MM`
+- `--schedule-weekdays 0,1,2,3,4`
+
 Notification event keys:
 - `circuit_halt`: circuit breaker halts a session
 - `fatal_error`: unhandled runtime failure in trading loop
 - `reconciliation_mismatch`: startup position reconciliation mismatch triggers safe-mode entry lockout
+- `schedule_block`: strict schedule gate blocked startup or runtime loop continuation
 - `session_summary`: session summary posted at session close
 - `watchdog_restart`: watchdog restarting bot after non-zero exit
 - `watchdog_stop`: watchdog stops (clean exit, stop flag, breaker-halt, or max restarts)

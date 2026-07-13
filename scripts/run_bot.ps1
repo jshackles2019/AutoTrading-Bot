@@ -32,6 +32,11 @@ Param(
     [int]$RiskMaxConsecutiveLosses,
     [int]$TestForceHaltAfterLoops,
     [string]$TestForceHaltReason,
+    [switch]$ScheduleEnabled,
+    [switch]$ScheduleDisabled,
+    [string]$ScheduleStart,
+    [string]$ScheduleEnd,
+    [string]$ScheduleWeekdays,
     [switch]$Watchdog,
     [switch]$AllowLockoutStart,
     [int]$WatchdogMaxRestarts = 10,
@@ -235,6 +240,21 @@ function New-BotCommandParts {
     }
     if ($BoundParams.ContainsKey("TestForceHaltReason")) {
         $parts += @("--test-force-halt-reason", (ConvertTo-QuotedArg -Value $TestForceHaltReason))
+    }
+    if ($ScheduleEnabled) {
+        $parts += "--schedule-enabled"
+    }
+    if ($ScheduleDisabled) {
+        $parts += "--schedule-disabled"
+    }
+    if ($BoundParams.ContainsKey("ScheduleStart")) {
+        $parts += @("--schedule-start", "$ScheduleStart")
+    }
+    if ($BoundParams.ContainsKey("ScheduleEnd")) {
+        $parts += @("--schedule-end", "$ScheduleEnd")
+    }
+    if ($BoundParams.ContainsKey("ScheduleWeekdays")) {
+        $parts += @("--schedule-weekdays", "$ScheduleWeekdays")
     }
 
     return $parts

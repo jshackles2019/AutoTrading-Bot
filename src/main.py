@@ -11,7 +11,7 @@ import os
 import random
 import time
 import sys
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 import statistics
@@ -194,6 +194,44 @@ def _resolve_risk_config(config: Dict[str, Any], args: argparse.Namespace) -> Di
     return risk
 
 
+def _resolve_automation_config(config: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
+    """Resolve automation controls (schedule gate) from settings + CLI overrides."""
+    automation = dict(config.get("automation", {}))
+    trading_window = dict(automation.get("trading_window", {}))
+
+    if args.schedule_enabled and args.schedule_disabled:
+        raise ValueError("Cannot use --schedule-enabled and --schedule-disabled together")
+
+    if args.schedule_enabled:
+        trading_window["enabled"] = True
+    if args.schedule_disabled:
+        trading_window["enabled"] = False
+    if args.schedule_start is not None:
+        trading_window["start"] = args.schedule_start
+    if args.schedule_end is not None:
+        trading_window["end"] = args.schedule_end
+    if args.schedule_weekdays is not None:
+        weekdays: List[int] = []
+        for token in str(args.schedule_weekdays).split(","):
+            token = token.strip()
+            if not token:
+                continue
+            day = int(token)
+            if day < 0 or day > 6:
+                raise ValueError("--schedule-weekdays values must be in range 0..6")
+            weekdays.append(day)
+        trading_window["weekdays"] = weekdays
+
+    trading_window.setdefault("enabled", True)
+    trading_window.setdefault("start", "09:30")
+    trading_window.setdefault("end", "16:00")
+    trading_window.setdefault("weekdays", [0, 1, 2, 3, 4])
+
+    automation["trading_window"] = trading_window
+    config["automation"] = automation
+    return automation
+
+
 class TradingSession:
     """Manages a single trading session."""
     
@@ -233,6 +271,7 @@ class TradingSession:
         self.halt_reason: Optional[str] = None
         self.entry_lockout = False
         self.entry_lockout_reason: Optional[str] = None
+        self._schedule_notified = False
 
         risk_cfg = self.config.get("risk", {})
         self.max_daily_drawdown_pct = risk_cfg.get("max_daily_drawdown_pct")
@@ -240,6 +279,13 @@ class TradingSession:
         self.max_open_positions = risk_cfg.get("max_open_positions")
         self.symbol_cooldown_minutes = float(risk_cfg.get("symbol_cooldown_minutes", 0) or 0)
         self.session_start_equity: Optional[float] = None
+
+        automation_cfg = self.config.get("automation", {}) if isinstance(self.config, dict) else {}
+        schedule_cfg = automation_cfg.get("trading_window", {}) if isinstance(automation_cfg, dict) else {}
+        self.schedule_enabled = bool(schedule_cfg.get("enabled", False))
+        self.schedule_start = str(schedule_cfg.get("start", "09:30"))
+        self.schedule_end = str(schedule_cfg.get("end", "16:00"))
+        self.schedule_weekdays = [int(day) for day in (schedule_cfg.get("weekdays", [0, 1, 2, 3, 4]) or [0, 1, 2, 3, 4])]
 
         # Optional deterministic test hook for circuit-breaker automation tests.
         test_hooks = self.config.get("test_hooks", {}) if isinstance(self.config, dict) else {}
@@ -296,6 +342,56 @@ class TradingSession:
             title="Breakout Bot Startup Reconciliation Mismatch",
         )
 
+    @staticmethod
+    def _parse_hhmm(value: str) -> dt_time:
+        """Parse HH:MM 24-hour clock value."""
+        parts = str(value).split(":")
+        if len(parts) != 2:
+            raise ValueError(f"Invalid time format '{value}', expected HH:MM")
+        hour = int(parts[0])
+        minute = int(parts[1])
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            raise ValueError(f"Invalid time '{value}', expected HH:MM in 24-hour range")
+        return dt_time(hour, minute)
+
+    def _within_schedule_window(self, check_time: Optional[datetime] = None) -> bool:
+        """Return True when current market-time is inside configured trading window."""
+        if not self.schedule_enabled:
+            return True
+
+        current = check_time or utils.now_market()
+        if current.tzinfo is None:
+            current = utils.UTC_TZ.localize(current).astimezone(utils.MARKET_TZ)
+        else:
+            current = current.astimezone(utils.MARKET_TZ)
+
+        if int(current.weekday()) not in self.schedule_weekdays:
+            return False
+
+        start = self._parse_hhmm(self.schedule_start)
+        end = self._parse_hhmm(self.schedule_end)
+        now_t = current.time()
+        if start < end:
+            return start <= now_t < end
+        # Overnight windows are supported (for non-equity markets / future use).
+        return now_t >= start or now_t < end
+
+    def _enforce_schedule_gate(self, account_equity: Optional[float], phase: str) -> bool:
+        """Return False when run should stop due to schedule window policy."""
+        if self._within_schedule_window():
+            return True
+
+        message = (
+            f"Outside allowed trading window ({self.schedule_start}-{self.schedule_end}, "
+            f"weekdays={self.schedule_weekdays}) during {phase}."
+        )
+        self.logger.logger.warning(f"SCHEDULE GATE | {message}")
+        self._write_runtime_status("stopped", message, account_equity=account_equity)
+        if not self._schedule_notified:
+            notify_discord("schedule_block", message, title="Breakout Bot Schedule Gate")
+            self._schedule_notified = True
+        return False
+
     def _perform_startup_reconciliation(self) -> None:
         """Reconcile broker positions against local tracked state before enabling entries."""
         try:
@@ -336,6 +432,12 @@ class TradingSession:
                     "max_consecutive_losses": self.max_consecutive_losses,
                     "max_open_positions": self.max_open_positions,
                     "symbol_cooldown_minutes": self.symbol_cooldown_minutes,
+                },
+                "schedule_gate": {
+                    "enabled": self.schedule_enabled,
+                    "start": self.schedule_start,
+                    "end": self.schedule_end,
+                    "weekdays": self.schedule_weekdays,
                 },
                 "symbol_cooldowns": self.symbol_cooldowns,
             }
@@ -416,6 +518,10 @@ class TradingSession:
             self.session_start_equity = float(account.get("equity", 0.0) or 0.0)
             self.logger.logger.info(f"Account equity: ${account['equity']:,.2f}")
             self.logger.logger.info(f"Buying power: ${account['buying_power']:,.2f}")
+
+            if not self._enforce_schedule_gate(account_equity=self.session_start_equity, phase="startup"):
+                return
+
             self._perform_startup_reconciliation()
             if self.entry_lockout and self.entry_lockout_reason:
                 self.logger.logger.warning(
@@ -433,6 +539,12 @@ class TradingSession:
                 return utils.is_market_open() or self.bypass_market_hours
             
             while _can_run_loop():
+                if not self._enforce_schedule_gate(
+                    account_equity=float(account.get("equity", 0.0) or 0.0),
+                    phase="runtime loop",
+                ):
+                    break
+
                 if self._stop_requested():
                     self.logger.logger.warning("Manual stop requested. Ending trading session.")
                     self._write_runtime_status("stopped", "Manual stop flag requested")
@@ -1100,6 +1212,16 @@ def main():
                         help="Reset persisted runtime breaker state and exit")
     parser.add_argument("--reset-runtime-clear-cooldowns", action="store_true",
                         help="Used with --reset-runtime-status to also clear symbol cooldown history")
+    parser.add_argument("--schedule-enabled", action="store_true",
+                        help="Enable strict daily trading schedule gate")
+    parser.add_argument("--schedule-disabled", action="store_true",
+                        help="Disable strict daily trading schedule gate")
+    parser.add_argument("--schedule-start", type=str, default=None,
+                        help="Trading schedule start time HH:MM in America/New_York")
+    parser.add_argument("--schedule-end", type=str, default=None,
+                        help="Trading schedule end time HH:MM in America/New_York")
+    parser.add_argument("--schedule-weekdays", type=str, default=None,
+                        help="Comma-separated weekdays (0=Mon..6=Sun) allowed by schedule gate")
     args = parser.parse_args()
 
     print("\n" + "="*60)
@@ -1120,6 +1242,7 @@ def main():
         config["symbols"] = resolved_symbols
         scanner_cfg = _resolve_scanner_config(config, args)
         risk_cfg = _resolve_risk_config(config, args)
+        automation_cfg = _resolve_automation_config(config, args)
 
         if args.test_force_halt_after_loops is not None:
             if args.test_force_halt_after_loops < 0:
@@ -1151,6 +1274,13 @@ def main():
         print(f"  Symbol cooldown (min): {risk_cfg.get('symbol_cooldown_minutes')}")
         print(f"  Max daily drawdown: {risk_cfg.get('max_daily_drawdown_pct')}")
         print(f"  Max consecutive losses: {risk_cfg.get('max_consecutive_losses')}")
+        trading_window_cfg = automation_cfg.get("trading_window", {})
+        print(
+            "  Schedule gate: "
+            f"enabled={trading_window_cfg.get('enabled')} "
+            f"window={trading_window_cfg.get('start')}-{trading_window_cfg.get('end')} "
+            f"weekdays={trading_window_cfg.get('weekdays')}"
+        )
         if args.test_force_halt_after_loops is not None:
             print(f"  Test forced halt loops: {args.test_force_halt_after_loops}")
 

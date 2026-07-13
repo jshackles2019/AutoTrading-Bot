@@ -22,6 +22,13 @@ timeframe: 5Min
 lookback: 50
 loop_interval_seconds: 60
 
+automation:
+  trading_window:
+    enabled: true
+    start: "09:30"
+    end: "16:00"
+    weekdays: [0, 1, 2, 3, 4]
+
 risk:
   max_risk_pct: 0.01   # 1% of equity
   max_trades_per_day: 3

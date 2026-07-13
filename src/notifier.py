@@ -13,6 +13,7 @@ DEFAULT_EVENTS = {
     "circuit_halt",
     "fatal_error",
     "reconciliation_mismatch",
+    "schedule_block",
     "session_summary",
     "watchdog_restart",
     "watchdog_stop",
