@@ -296,6 +296,24 @@ left, right = st.columns([1.2, 2.0])
 
 with left:
     st.subheader("Controls")
+    with st.expander("Control Definitions", expanded=False):
+        st.markdown(
+            """
+            - **Account mode**: `paper` uses simulated trading, `live` uses real-money account actions.
+            - **Skip market check**: allows runs outside regular market hours.
+            - **Dry run mode**: simulates strategy decisions without placing broker orders.
+            - **Smoke test only**: runs a minimal connectivity/config check then exits.
+            - **Symbol universe**: choose symbols from config only, or scan all tradeable US symbols.
+            - **Max symbols**: cap how many symbols are evaluated in each loop.
+            - **Selection mode**: choose how capped symbols are sampled (rotate, random, or fixed-first).
+            - **Top ranked candidates**: limit how many scored symbols are considered for signals.
+            - **Price and volume filters**: drop illiquid or out-of-range symbols before scoring.
+            - **Score weights**: tune the scoring influence of confidence, breakout strength, volume, and momentum.
+            - **Volume ratio cap**: prevent very large volume spikes from dominating the score.
+            - **Additional symbols**: manually include symbols for targeted testing.
+            - **Use max loops / Max loops**: stop automatically after a chosen number of loops.
+            """
+        )
     if "account_mode" not in st.session_state:
         st.session_state["account_mode"] = _default_account_mode()
 
@@ -314,9 +332,21 @@ with left:
 
     live_guard_required = account_mode == "live"
 
-    skip_market_check = st.toggle("Skip market check", value=True)
-    dry_run = st.toggle("Dry run mode", value=True)
-    smoke_test = st.toggle("Smoke test only", value=False)
+    skip_market_check = st.toggle(
+        "Skip market check",
+        value=True,
+        help="Run even if the market appears closed. Useful for tests and diagnostics.",
+    )
+    dry_run = st.toggle(
+        "Dry run mode",
+        value=True,
+        help="Simulate strategy execution without sending real orders to Alpaca.",
+    )
+    smoke_test = st.toggle(
+        "Smoke test only",
+        value=False,
+        help="Run a quick health check (config/API/basic flow) and exit.",
+    )
 
     st.markdown("**Symbols**")
     symbol_universe = st.selectbox(
@@ -330,27 +360,88 @@ with left:
         max_value=10000,
         value=200,
         step=1,
+        help="Maximum symbols evaluated in each scan loop. Set 0 for no cap.",
     )
     scan_selection = st.selectbox(
         "Capped-scan symbol selection",
         options=["rotating", "random", "first"],
         help="When max symbols is capped, rotate through the universe, pick random symbols, or always use the first slice.",
     )
-    top_candidates = st.number_input("Top ranked candidates", min_value=1, max_value=1000, value=20, step=1)
-    min_price = st.number_input("Min price filter", min_value=0.0, value=0.0, step=1.0)
-    max_price = st.number_input("Max price filter (0 to disable)", min_value=0.0, value=0.0, step=1.0)
-    min_avg_volume = st.number_input("Min average volume (20 bars)", min_value=0, value=0, step=10000)
+    top_candidates = st.number_input(
+        "Top ranked candidates",
+        min_value=1,
+        max_value=1000,
+        value=20,
+        step=1,
+        help="Number of highest-scoring symbols passed to signal evaluation.",
+    )
+    min_price = st.number_input(
+        "Min price filter",
+        min_value=0.0,
+        value=0.0,
+        step=1.0,
+        help="Exclude symbols below this price. Set 0 to disable.",
+    )
+    max_price = st.number_input(
+        "Max price filter (0 to disable)",
+        min_value=0.0,
+        value=0.0,
+        step=1.0,
+        help="Exclude symbols above this price. Set 0 to disable.",
+    )
+    min_avg_volume = st.number_input(
+        "Min average volume (20 bars)",
+        min_value=0,
+        value=0,
+        step=10000,
+        help="Require at least this 20-bar average volume. Set 0 to disable.",
+    )
     st.markdown("**Scanner score weights**")
-    weight_confidence = st.number_input("Weight: confidence", min_value=0.0, value=50.0, step=1.0)
-    weight_breakout = st.number_input("Weight: breakout", min_value=0.0, value=200.0, step=1.0)
-    weight_volume = st.number_input("Weight: volume", min_value=0.0, value=10.0, step=1.0)
-    weight_momentum = st.number_input("Weight: momentum", min_value=0.0, value=100.0, step=1.0)
-    volume_ratio_cap = st.number_input("Volume ratio cap", min_value=0.1, value=5.0, step=0.1)
+    weight_confidence = st.number_input(
+        "Weight: confidence",
+        min_value=0.0,
+        value=50.0,
+        step=1.0,
+        help="How much strategy confidence contributes to ranking score.",
+    )
+    weight_breakout = st.number_input(
+        "Weight: breakout",
+        min_value=0.0,
+        value=200.0,
+        step=1.0,
+        help="How strongly breakout distance from key levels influences score.",
+    )
+    weight_volume = st.number_input(
+        "Weight: volume",
+        min_value=0.0,
+        value=10.0,
+        step=1.0,
+        help="How much unusual volume boosts symbol ranking.",
+    )
+    weight_momentum = st.number_input(
+        "Weight: momentum",
+        min_value=0.0,
+        value=100.0,
+        step=1.0,
+        help="How much short-term price momentum affects ranking.",
+    )
+    volume_ratio_cap = st.number_input(
+        "Volume ratio cap",
+        min_value=0.1,
+        value=5.0,
+        step=0.1,
+        help="Upper bound on volume-ratio effect so spikes do not dominate scoring.",
+    )
     symbol_input = st.text_input(
         "Additional/override symbols (comma-separated)",
         placeholder="AAPL,MSFT,NVDA",
+        help="Comma-separated symbols to target directly (for testing or focus lists).",
     )
-    append_symbols = st.toggle("Append typed symbols instead of replacing", value=True)
+    append_symbols = st.toggle(
+        "Append typed symbols instead of replacing",
+        value=True,
+        help="On: add typed symbols to the selected universe. Off: use only typed symbols.",
+    )
 
     live_confirm_token = ""
     if live_guard_required and not dry_run and not smoke_test:
@@ -361,8 +452,19 @@ with left:
             help="Required for live runs when dry-run is disabled.",
         )
 
-    max_loops_enabled = st.toggle("Use max loops", value=True)
-    max_loops = st.number_input("Max loops", min_value=1, max_value=1000, value=1, step=1)
+    max_loops_enabled = st.toggle(
+        "Use max loops",
+        value=True,
+        help="Automatically stop after N loops instead of running indefinitely.",
+    )
+    max_loops = st.number_input(
+        "Max loops",
+        min_value=1,
+        max_value=1000,
+        value=1,
+        step=1,
+        help="Loop count used when max loops is enabled.",
+    )
 
     run_args: list[str] = []
     if smoke_test:
