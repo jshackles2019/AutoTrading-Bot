@@ -281,27 +281,38 @@ def _format_status(value: object) -> str:
     return text or "Unavailable"
 
 
-def _build_auto_trader_args(*, dry_run: bool) -> list[str]:
+def _build_auto_trader_args(
+    *,
+    dry_run: bool,
+    max_symbols: int,
+    scan_selection: str,
+    top_candidates: int,
+    min_average_volume: int,
+    risk_max_trades_per_day: int,
+    risk_max_risk_pct: float,
+    risk_max_open_risk_pct: float,
+    risk_max_position_pct: float,
+) -> list[str]:
     """Build guarded continuous-scan args for one-click auto trader mode."""
     args = [
         "--symbol-universe",
         "us-all",
         "--max-symbols",
-        "500",
+        str(int(max_symbols)),
         "--scan-selection",
-        "rotating",
+        str(scan_selection),
         "--top-candidates",
-        "25",
+        str(int(top_candidates)),
         "--min-average-volume",
-        "100000",
+        str(int(min_average_volume)),
         "--risk-max-trades-per-day",
-        "2",
+        str(int(risk_max_trades_per_day)),
         "--risk-max-risk-pct",
-        "0.005",
+        str(float(risk_max_risk_pct)),
         "--risk-max-open-risk-pct",
-        "0.01",
+        str(float(risk_max_open_risk_pct)),
         "--risk-max-position-pct",
-        "0.03",
+        str(float(risk_max_position_pct)),
     ]
     if dry_run:
         args.append("--dry-run")
@@ -543,6 +554,76 @@ with left:
     with auto_col2:
         start_auto_bg_clicked = st.button("Start Auto Trader (Guarded)", use_container_width=True)
 
+    with st.expander("Auto trader guardrails", expanded=False):
+        ag1, ag2 = st.columns(2)
+        with ag1:
+            auto_max_symbols = st.number_input(
+                "Auto max symbols",
+                min_value=25,
+                max_value=5000,
+                value=500,
+                step=25,
+                help="How many symbols are scanned per loop in guarded auto mode.",
+            )
+            auto_scan_selection = st.selectbox(
+                "Auto scan selection",
+                options=["rotating", "random", "first"],
+                index=0,
+                help="How symbols are chosen when max symbols caps the US universe.",
+            )
+            auto_top_candidates = st.number_input(
+                "Auto top candidates",
+                min_value=1,
+                max_value=500,
+                value=25,
+                step=1,
+                help="Number of ranked symbols evaluated for potential entries each loop.",
+            )
+            auto_min_avg_volume = st.number_input(
+                "Auto min average volume",
+                min_value=0,
+                max_value=100000000,
+                value=100000,
+                step=10000,
+                help="Liquidity floor for guarded auto mode.",
+            )
+        with ag2:
+            auto_risk_max_trades_per_day = st.number_input(
+                "Auto max trades/day",
+                min_value=1,
+                max_value=50,
+                value=2,
+                step=1,
+                help="Maximum trades allowed per day in guarded auto mode.",
+            )
+            auto_risk_max_risk_pct = st.number_input(
+                "Auto max risk/trade",
+                min_value=0.001,
+                max_value=0.05,
+                value=0.005,
+                step=0.001,
+                format="%.3f",
+                help="Fraction of equity risked per trade.",
+            )
+            auto_risk_max_open_risk_pct = st.number_input(
+                "Auto max open risk",
+                min_value=0.002,
+                max_value=0.2,
+                value=0.01,
+                step=0.001,
+                format="%.3f",
+                help="Maximum total open risk as a fraction of equity.",
+            )
+            auto_risk_max_position_pct = st.number_input(
+                "Auto max position size",
+                min_value=0.005,
+                max_value=0.5,
+                value=0.03,
+                step=0.005,
+                format="%.3f",
+                help="Maximum position notional as a fraction of equity.",
+            )
+
     auto_live_confirm_token = ""
     if live_guard_required and not auto_trader_dry_run:
         auto_live_confirm_token = st.text_input(
@@ -582,7 +663,17 @@ with left:
             st.error("Live auto trader blocked. Enter token LIVE-TRADE-YES to proceed.")
         else:
             _clear_scan_stop()
-            auto_args = _build_auto_trader_args(dry_run=auto_trader_dry_run)
+            auto_args = _build_auto_trader_args(
+                dry_run=auto_trader_dry_run,
+                max_symbols=int(auto_max_symbols),
+                scan_selection=auto_scan_selection,
+                top_candidates=int(auto_top_candidates),
+                min_average_volume=int(auto_min_avg_volume),
+                risk_max_trades_per_day=int(auto_risk_max_trades_per_day),
+                risk_max_risk_pct=float(auto_risk_max_risk_pct),
+                risk_max_open_risk_pct=float(auto_risk_max_open_risk_pct),
+                risk_max_position_pct=float(auto_risk_max_position_pct),
+            )
             state = _start_background(auto_args, env_overrides=env_overrides)
             state["account_mode"] = account_mode
             state["mode"] = "auto_trader_guarded"
