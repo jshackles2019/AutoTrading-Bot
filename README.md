@@ -168,6 +168,21 @@ Live mode example (use extreme caution):
 ./scripts/run_bot.ps1 -AccountMode live -LiveConfirmToken LIVE-TRADE-YES
 ```
 
+Watchdog mode for unattended auto-restart:
+
+```powershell
+./scripts/run_bot.ps1 -AccountMode paper -DryRun -SymbolUniverse us-all -MaxSymbols 500 -TopCandidates 25 -SkipMarketCheck -Watchdog
+```
+
+Watchdog behavior:
+- Restarts bot process on non-zero exit codes.
+- Uses exponential backoff between restarts.
+- Stops after `-WatchdogMaxRestarts` attempts.
+- Writes state/log artifacts to:
+  - `data/ui/watchdog_state.json`
+  - `data/logs/watchdog_runner.log`
+- Create `data/ui/watchdog_stop.flag` to request watchdog shutdown.
+
 The script sets `ALPACA_PAPER` automatically per run:
 - `-AccountMode paper` => `ALPACA_PAPER=True`
 - `-AccountMode live` => `ALPACA_PAPER=False`

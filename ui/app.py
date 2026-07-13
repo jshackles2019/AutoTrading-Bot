@@ -28,6 +28,8 @@ BG_OUTPUT_FILE = DATA_LOGS / "background_runner.log"
 SCANNER_SNAPSHOT_FILE = DATA_UI / "scanner_snapshot.json"
 STOP_SCANS_FLAG_FILE = DATA_UI / "stop_scans.flag"
 AUTO_TRADER_PRESETS_FILE = DATA_UI / "auto_trader_presets.json"
+WATCHDOG_STATE_FILE = DATA_UI / "watchdog_state.json"
+WATCHDOG_LOG_FILE = DATA_LOGS / "watchdog_runner.log"
 SRC_MAIN = ROOT / "src" / "main.py"
 REPO_PROCESS_HELPER = ROOT / "scripts" / "repo_processes.ps1"
 
@@ -82,6 +84,15 @@ def _load_bg_state() -> Optional[dict]:
         return None
     try:
         return json.loads(BG_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _load_watchdog_state() -> Optional[dict]:
+    if not WATCHDOG_STATE_FILE.exists():
+        return None
+    try:
+        return json.loads(WATCHDOG_STATE_FILE.read_text(encoding="utf-8"))
     except Exception:
         return None
 
@@ -839,6 +850,24 @@ with left:
     if bg_state and bg_state.get("command"):
         st.write(f"Command: `{bg_state['command']}`")
     st.write(f"Scan stop requested: {'Yes' if _scan_stop_requested() else 'No'}")
+
+    watchdog_state = _load_watchdog_state()
+    if watchdog_state:
+        st.caption("Watchdog Supervisor")
+        st.write(f"Watchdog status: **{watchdog_state.get('status', 'unknown')}**")
+        st.write(f"Watchdog restarts: `{watchdog_state.get('restart_count', 0)}`")
+        if watchdog_state.get("last_exit_code") is not None:
+            st.write(f"Watchdog last exit code: `{watchdog_state.get('last_exit_code')}`")
+        if watchdog_state.get("next_restart_at"):
+            st.write(f"Watchdog next restart: `{watchdog_state.get('next_restart_at')}`")
+        if watchdog_state.get("message"):
+            st.write(f"Watchdog note: {watchdog_state.get('message')}")
+        if WATCHDOG_LOG_FILE.exists():
+            st.text_area(
+                "watchdog-log",
+                _read_last_lines(WATCHDOG_LOG_FILE, max_lines=60, newest_first=True),
+                height=130,
+            )
 
     start_col, stop_col, req_stop_col, clear_stop_col = st.columns(4)
     with start_col:
