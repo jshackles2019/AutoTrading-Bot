@@ -27,6 +27,10 @@ risk:
   max_trades_per_day: 3
   max_open_risk_pct: 0.03
   max_position_pct: 0.05
+  max_open_positions: 5
+  symbol_cooldown_minutes: 30
+  max_daily_drawdown_pct: 0.03
+  max_consecutive_losses: 3
   min_shares: 1
   volume_threshold_factor: 1.5
 

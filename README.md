@@ -174,6 +174,12 @@ Watchdog mode for unattended auto-restart:
 ./scripts/run_bot.ps1 -AccountMode paper -DryRun -SymbolUniverse us-all -MaxSymbols 500 -TopCandidates 25 -SkipMarketCheck -Watchdog
 ```
 
+Paper mode with explicit circuit-breaker guardrails:
+
+```powershell
+./scripts/run_bot.ps1 -AccountMode paper -DryRun -SkipMarketCheck -Watchdog -RiskMaxOpenPositions 5 -RiskSymbolCooldownMinutes 30 -RiskMaxDailyDrawdownPct 0.03 -RiskMaxConsecutiveLosses 3
+```
+
 Watchdog behavior:
 - Restarts bot process on non-zero exit codes.
 - Uses exponential backoff between restarts.
@@ -182,6 +188,19 @@ Watchdog behavior:
   - `data/ui/watchdog_state.json`
   - `data/logs/watchdog_runner.log`
 - Create `data/ui/watchdog_stop.flag` to request watchdog shutdown.
+
+Runtime status and circuit-breaker state is written to:
+- `data/ui/runtime_status.json`
+
+Risk override flags (supported by both `src/main.py` and `scripts/run_bot.ps1`):
+- `--risk-max-trades-per-day` / `-RiskMaxTradesPerDay`
+- `--risk-max-risk-pct` / `-RiskMaxRiskPct`
+- `--risk-max-open-risk-pct` / `-RiskMaxOpenRiskPct`
+- `--risk-max-position-pct` / `-RiskMaxPositionPct`
+- `--risk-max-open-positions` / `-RiskMaxOpenPositions`
+- `--risk-symbol-cooldown-minutes` / `-RiskSymbolCooldownMinutes`
+- `--risk-max-daily-drawdown-pct` / `-RiskMaxDailyDrawdownPct`
+- `--risk-max-consecutive-losses` / `-RiskMaxConsecutiveLosses`
 
 The script sets `ALPACA_PAPER` automatically per run:
 - `-AccountMode paper` => `ALPACA_PAPER=True`

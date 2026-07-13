@@ -21,6 +21,12 @@ def evaluate(account: Dict[str, Any], signal: Dict[str, Any], config: Dict[str, 
             - max_position_pct: Maximum position notional as fraction of equity (default 0.05)
             - current_trades_today: Number of trades already taken today (default 0)
             - current_open_risk: Current open risk dollars (default 0.0)
+            - max_open_positions: Max concurrent open positions tracked by this bot (optional)
+            - current_open_positions: Current concurrent open positions (default 0)
+            - symbol: Candidate symbol being evaluated (optional)
+            - symbol_cooldown_minutes: Cooldown window after a symbol exit (default 0)
+            - symbol_cooldowns: Dict[symbol] -> unix timestamp for last exit
+            - current_time: Unix timestamp used for cooldown checks
     Returns:
         Dict with keys: allowed, shares, reason, risk_per_share, max_risk_dollars, risk_dollars.
     """
@@ -32,6 +38,12 @@ def evaluate(account: Dict[str, Any], signal: Dict[str, Any], config: Dict[str, 
     min_shares = config.get("min_shares", 1)
     current_trades_today = config.get("current_trades_today", 0)
     current_open_risk = config.get("current_open_risk", 0.0)
+    max_open_positions = config.get("max_open_positions")
+    current_open_positions = config.get("current_open_positions", 0)
+    symbol = str(config.get("symbol") or signal.get("symbol") or "").upper()
+    symbol_cooldown_minutes = float(config.get("symbol_cooldown_minutes", 0) or 0)
+    symbol_cooldowns = config.get("symbol_cooldowns", {}) or {}
+    current_time = float(config.get("current_time", 0) or 0)
 
     # Validate signal
     if not signal or signal.get("action") != "BUY":
@@ -86,6 +98,30 @@ def evaluate(account: Dict[str, Any], signal: Dict[str, Any], config: Dict[str, 
             "shares": 0,
             "reason": f"Max trades per day reached ({current_trades_today}/{max_trades_per_day})",
         }
+
+    if max_open_positions is not None and int(current_open_positions) >= int(max_open_positions):
+        return {
+            "allowed": False,
+            "shares": 0,
+            "reason": f"Max open positions reached ({current_open_positions}/{max_open_positions})",
+        }
+
+    if symbol and symbol_cooldown_minutes > 0 and symbol in symbol_cooldowns:
+        try:
+            last_exit_ts = float(symbol_cooldowns[symbol])
+            if current_time <= 0:
+                import time
+                current_time = time.time()
+            remaining = (symbol_cooldown_minutes * 60.0) - (current_time - last_exit_ts)
+            if remaining > 0:
+                return {
+                    "allowed": False,
+                    "shares": 0,
+                    "reason": f"Symbol cooldown active for {symbol} ({int(remaining)}s remaining)",
+                }
+        except Exception:
+            # Ignore malformed cooldown values and continue with other risk checks.
+            pass
 
     max_risk_dollars = equity * max_risk_pct
     shares = math.floor(max_risk_dollars / risk_per_share)

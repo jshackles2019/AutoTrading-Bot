@@ -35,6 +35,7 @@ DATA_UI_DIR = Path(__file__).resolve().parents[1] / "data" / "ui"
 SCANNER_SNAPSHOT_PATH = DATA_UI_DIR / "scanner_snapshot.json"
 STOP_SCANS_FLAG_PATH = DATA_UI_DIR / "stop_scans.flag"
 ACTIVE_BOT_PROCESS_PATH = DATA_UI_DIR / "active_bot_process.json"
+RUNTIME_STATUS_PATH = DATA_UI_DIR / "runtime_status.json"
 
 
 def _write_active_bot_process_state() -> None:
@@ -169,11 +170,23 @@ def _resolve_risk_config(config: Dict[str, Any], args: argparse.Namespace) -> Di
         risk["max_open_risk_pct"] = args.risk_max_open_risk_pct
     if args.risk_max_position_pct is not None:
         risk["max_position_pct"] = args.risk_max_position_pct
+    if args.risk_max_open_positions is not None:
+        risk["max_open_positions"] = args.risk_max_open_positions
+    if args.risk_symbol_cooldown_minutes is not None:
+        risk["symbol_cooldown_minutes"] = args.risk_symbol_cooldown_minutes
+    if args.risk_max_daily_drawdown_pct is not None:
+        risk["max_daily_drawdown_pct"] = args.risk_max_daily_drawdown_pct
+    if args.risk_max_consecutive_losses is not None:
+        risk["max_consecutive_losses"] = args.risk_max_consecutive_losses
 
     risk.setdefault("max_risk_pct", 0.01)
     risk.setdefault("max_trades_per_day", 3)
     risk.setdefault("max_open_risk_pct", 0.03)
     risk.setdefault("max_position_pct", 0.05)
+    risk.setdefault("max_open_positions", 5)
+    risk.setdefault("symbol_cooldown_minutes", 30)
+    risk.setdefault("max_daily_drawdown_pct", 0.03)
+    risk.setdefault("max_consecutive_losses", 3)
 
     config["risk"] = risk
     return risk
@@ -211,8 +224,78 @@ class TradingSession:
         self.session_pnl = 0.0
         self.trades_closed = 0
         self.wins = 0
+        self.consecutive_losses = 0
         self.scan_cursor = 0
         self._rng = random.Random()
+        self.symbol_cooldowns: Dict[str, float] = {}
+        self.halt_reason: Optional[str] = None
+
+        risk_cfg = self.config.get("risk", {})
+        self.max_daily_drawdown_pct = risk_cfg.get("max_daily_drawdown_pct")
+        self.max_consecutive_losses = risk_cfg.get("max_consecutive_losses")
+        self.max_open_positions = risk_cfg.get("max_open_positions")
+        self.symbol_cooldown_minutes = float(risk_cfg.get("symbol_cooldown_minutes", 0) or 0)
+        self.session_start_equity: Optional[float] = None
+
+    def _write_runtime_status(self, status: str, message: str, account_equity: Optional[float] = None) -> None:
+        """Persist runtime/circuit-breaker status for the UI."""
+        try:
+            DATA_UI_DIR.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "status": status,
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+                "message": message,
+                "halt_reason": self.halt_reason,
+                "session_start": self.session_start.isoformat(timespec="seconds"),
+                "session_start_equity": self.session_start_equity,
+                "account_equity": account_equity,
+                "session_pnl": round(float(self.session_pnl), 2),
+                "consecutive_losses": int(self.consecutive_losses),
+                "active_positions": int(len(self.active_trades)),
+                "circuit_breakers": {
+                    "max_daily_drawdown_pct": self.max_daily_drawdown_pct,
+                    "max_consecutive_losses": self.max_consecutive_losses,
+                    "max_open_positions": self.max_open_positions,
+                    "symbol_cooldown_minutes": self.symbol_cooldown_minutes,
+                },
+            }
+            RUNTIME_STATUS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _trigger_halt(self, reason: str, account_equity: Optional[float] = None) -> None:
+        """Set halt reason and persist a halted runtime status record."""
+        self.halt_reason = reason
+        self.logger.logger.error(f"CIRCUIT BREAKER TRIGGERED | {reason}")
+        self._write_runtime_status("halted", reason, account_equity=account_equity)
+
+    def _check_circuit_breakers(self, account: Dict[str, Any]) -> bool:
+        """Return True when a circuit-breaker should stop the session."""
+        try:
+            current_equity = float(account.get("equity", 0.0) or 0.0)
+        except Exception:
+            current_equity = 0.0
+
+        if self.session_start_equity is None and current_equity > 0:
+            self.session_start_equity = current_equity
+
+        if self.max_daily_drawdown_pct is not None and self.session_start_equity and self.session_start_equity > 0:
+            drawdown_pct = max(0.0, (self.session_start_equity - current_equity) / self.session_start_equity)
+            if drawdown_pct >= float(self.max_daily_drawdown_pct):
+                self._trigger_halt(
+                    f"Daily drawdown limit exceeded ({drawdown_pct:.2%} >= {float(self.max_daily_drawdown_pct):.2%})",
+                    account_equity=current_equity,
+                )
+                return True
+
+        if self.max_consecutive_losses is not None and self.consecutive_losses >= int(self.max_consecutive_losses):
+            self._trigger_halt(
+                f"Consecutive loss limit reached ({self.consecutive_losses}/{int(self.max_consecutive_losses)})",
+                account_equity=current_equity,
+            )
+            return True
+
+        return False
 
     def _stop_requested(self) -> bool:
         """Check whether a manual scan-stop request has been signaled by the UI."""
@@ -221,6 +304,7 @@ class TradingSession:
     def run(self):
         """Run the main trading loop."""
         _write_active_bot_process_state()
+        self._write_runtime_status("starting", "Trading session starting")
         self.logger.logger.info("="*60)
         self.logger.logger.info("TRADING SESSION STARTED")
         if self.dry_run:
@@ -230,6 +314,7 @@ class TradingSession:
         try:
             # Get account info
             account = alpaca_client.get_account()
+            self.session_start_equity = float(account.get("equity", 0.0) or 0.0)
             self.logger.logger.info(f"Account equity: ${account['equity']:,.2f}")
             self.logger.logger.info(f"Buying power: ${account['buying_power']:,.2f}")
             
@@ -245,7 +330,19 @@ class TradingSession:
             while _can_run_loop():
                 if self._stop_requested():
                     self.logger.logger.warning("Manual stop requested. Ending trading session.")
+                    self._write_runtime_status("stopped", "Manual stop flag requested")
                     break
+
+                try:
+                    account = alpaca_client.get_account()
+                except Exception as e:
+                    self.logger.log_error(f"Failed to refresh account snapshot: {e}", exc_info=e)
+                    account = account
+
+                if self._check_circuit_breakers(account):
+                    break
+
+                self._write_runtime_status("running", "Trading loop active", account_equity=float(account.get("equity", 0.0) or 0.0))
 
                 loop_count += 1
                 self.logger.logger.debug(f"\n--- Loop {loop_count} ---")
@@ -257,12 +354,14 @@ class TradingSession:
 
                 if self.max_loops is not None and loop_count >= self.max_loops:
                     self.logger.logger.info(f"Reached max loops ({self.max_loops}). Ending session.")
+                    self._write_runtime_status("stopped", f"Reached max loops ({self.max_loops})")
                     break
                 
                 # Check remaining market time
                 remaining = utils.market_hours_remaining()
                 if not self.bypass_market_hours and remaining.total_seconds() < loop_interval:
                     self.logger.logger.info(f"Market closing soon ({remaining}). Skipping sleep.")
+                    self._write_runtime_status("stopped", "Market closing soon")
                     break
                 
                 # Sleep before next iteration
@@ -271,8 +370,10 @@ class TradingSession:
         
         except KeyboardInterrupt:
             self.logger.logger.info("Trading interrupted by user")
+            self._write_runtime_status("stopped", "Interrupted by user")
         except Exception as e:
             self.logger.log_error(f"Fatal error in trading loop: {e}", exc_info=e)
+            self._write_runtime_status("error", f"Fatal error: {e}")
         finally:
             self._close_session()
             _clear_active_bot_process_state()
@@ -310,6 +411,11 @@ class TradingSession:
             risk_config = self.config.get("risk", {})
             risk_config["current_trades_today"] = self.trades_today
             risk_config["current_open_risk"] = self.open_risk_dollars
+            risk_config["current_open_positions"] = len(self.active_trades)
+            risk_config["symbol"] = symbol
+            risk_config["symbol_cooldown_minutes"] = self.symbol_cooldown_minutes
+            risk_config["symbol_cooldowns"] = self.symbol_cooldowns
+            risk_config["current_time"] = datetime.now().timestamp()
 
             risk_decision = evaluate_risk(account, signal, risk_config)
 
@@ -727,6 +833,12 @@ class TradingSession:
             self.trades_closed += 1
             if pnl > 0:
                 self.wins += 1
+                self.consecutive_losses = 0
+            elif pnl < 0:
+                self.consecutive_losses += 1
+
+            if self.symbol_cooldown_minutes > 0:
+                self.symbol_cooldowns[symbol] = datetime.now().timestamp()
             
             self.logger.logger.info(f"Trade closed: {symbol} | "
                                    f"P&L: {pnl:+.2f} ({pnl_pct:+.2f}%) | "
@@ -748,6 +860,10 @@ class TradingSession:
         
         self.logger.log_summary(self.session_start, session_end, self.trades_closed,
                                self.session_pnl, win_rate)
+        if self.halt_reason:
+            self._write_runtime_status("halted", self.halt_reason)
+        else:
+            self._write_runtime_status("stopped", "Session ended normally")
         
         # Log final positions
         if self.dry_run:
@@ -840,6 +956,14 @@ def main():
                         help="Risk guardrail override: max total open risk as equity fraction")
     parser.add_argument("--risk-max-position-pct", type=float, default=None,
                         help="Risk guardrail override: max position notional as equity fraction")
+    parser.add_argument("--risk-max-open-positions", type=int, default=None,
+                        help="Risk guardrail override: max concurrent open positions")
+    parser.add_argument("--risk-symbol-cooldown-minutes", type=float, default=None,
+                        help="Risk guardrail override: symbol cooldown minutes after an exit")
+    parser.add_argument("--risk-max-daily-drawdown-pct", type=float, default=None,
+                        help="Risk guardrail override: max drawdown from session-start equity")
+    parser.add_argument("--risk-max-consecutive-losses", type=int, default=None,
+                        help="Risk guardrail override: max consecutive losing exits before halt")
     args = parser.parse_args()
 
     print("\n" + "="*60)
@@ -879,6 +1003,10 @@ def main():
         print(f"  Max risk/trade: {risk_cfg.get('max_risk_pct')}")
         print(f"  Max open risk: {risk_cfg.get('max_open_risk_pct')}")
         print(f"  Max position size: {risk_cfg.get('max_position_pct')}")
+        print(f"  Max open positions: {risk_cfg.get('max_open_positions')}")
+        print(f"  Symbol cooldown (min): {risk_cfg.get('symbol_cooldown_minutes')}")
+        print(f"  Max daily drawdown: {risk_cfg.get('max_daily_drawdown_pct')}")
+        print(f"  Max consecutive losses: {risk_cfg.get('max_consecutive_losses')}")
 
         if args.smoke_test:
             return _run_smoke_test()

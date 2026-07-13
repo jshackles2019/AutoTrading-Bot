@@ -26,6 +26,10 @@ Param(
     [double]$RiskMaxRiskPct,
     [double]$RiskMaxOpenRiskPct,
     [double]$RiskMaxPositionPct,
+    [int]$RiskMaxOpenPositions,
+    [double]$RiskSymbolCooldownMinutes,
+    [double]$RiskMaxDailyDrawdownPct,
+    [int]$RiskMaxConsecutiveLosses,
     [switch]$Watchdog,
     [int]$WatchdogMaxRestarts = 10,
     [int]$WatchdogBaseBackoffSeconds = 5,
@@ -166,6 +170,18 @@ function New-BotCommandParts {
     }
     if ($BoundParams.ContainsKey("RiskMaxPositionPct")) {
         $parts += @("--risk-max-position-pct", "$RiskMaxPositionPct")
+    }
+    if ($BoundParams.ContainsKey("RiskMaxOpenPositions")) {
+        $parts += @("--risk-max-open-positions", "$RiskMaxOpenPositions")
+    }
+    if ($BoundParams.ContainsKey("RiskSymbolCooldownMinutes")) {
+        $parts += @("--risk-symbol-cooldown-minutes", "$RiskSymbolCooldownMinutes")
+    }
+    if ($BoundParams.ContainsKey("RiskMaxDailyDrawdownPct")) {
+        $parts += @("--risk-max-daily-drawdown-pct", "$RiskMaxDailyDrawdownPct")
+    }
+    if ($BoundParams.ContainsKey("RiskMaxConsecutiveLosses")) {
+        $parts += @("--risk-max-consecutive-losses", "$RiskMaxConsecutiveLosses")
     }
 
     return $parts

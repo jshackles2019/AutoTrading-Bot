@@ -30,6 +30,7 @@ STOP_SCANS_FLAG_FILE = DATA_UI / "stop_scans.flag"
 AUTO_TRADER_PRESETS_FILE = DATA_UI / "auto_trader_presets.json"
 WATCHDOG_STATE_FILE = DATA_UI / "watchdog_state.json"
 WATCHDOG_LOG_FILE = DATA_LOGS / "watchdog_runner.log"
+RUNTIME_STATUS_FILE = DATA_UI / "runtime_status.json"
 SRC_MAIN = ROOT / "src" / "main.py"
 REPO_PROCESS_HELPER = ROOT / "scripts" / "repo_processes.ps1"
 
@@ -93,6 +94,15 @@ def _load_watchdog_state() -> Optional[dict]:
         return None
     try:
         return json.loads(WATCHDOG_STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+
+def _load_runtime_status() -> Optional[dict]:
+    if not RUNTIME_STATUS_FILE.exists():
+        return None
+    try:
+        return json.loads(RUNTIME_STATUS_FILE.read_text(encoding="utf-8"))
     except Exception:
         return None
 
@@ -304,6 +314,10 @@ def _build_auto_trader_args(
     risk_max_risk_pct: float,
     risk_max_open_risk_pct: float,
     risk_max_position_pct: float,
+    risk_max_open_positions: int,
+    risk_symbol_cooldown_minutes: float,
+    risk_max_daily_drawdown_pct: float,
+    risk_max_consecutive_losses: int,
 ) -> list[str]:
     """Build guarded continuous-scan args for one-click auto trader mode."""
     args = [
@@ -325,6 +339,14 @@ def _build_auto_trader_args(
         str(float(risk_max_open_risk_pct)),
         "--risk-max-position-pct",
         str(float(risk_max_position_pct)),
+        "--risk-max-open-positions",
+        str(int(risk_max_open_positions)),
+        "--risk-symbol-cooldown-minutes",
+        str(float(risk_symbol_cooldown_minutes)),
+        "--risk-max-daily-drawdown-pct",
+        str(float(risk_max_daily_drawdown_pct)),
+        "--risk-max-consecutive-losses",
+        str(int(risk_max_consecutive_losses)),
     ]
     if dry_run:
         args.append("--dry-run")
@@ -343,6 +365,10 @@ def _default_auto_trader_presets() -> dict[str, dict[str, float | int | str]]:
             "risk_max_risk_pct": 0.003,
             "risk_max_open_risk_pct": 0.008,
             "risk_max_position_pct": 0.02,
+            "risk_max_open_positions": 3,
+            "risk_symbol_cooldown_minutes": 45,
+            "risk_max_daily_drawdown_pct": 0.02,
+            "risk_max_consecutive_losses": 2,
         },
         "balanced": {
             "max_symbols": 500,
@@ -353,6 +379,10 @@ def _default_auto_trader_presets() -> dict[str, dict[str, float | int | str]]:
             "risk_max_risk_pct": 0.005,
             "risk_max_open_risk_pct": 0.01,
             "risk_max_position_pct": 0.03,
+            "risk_max_open_positions": 5,
+            "risk_symbol_cooldown_minutes": 30,
+            "risk_max_daily_drawdown_pct": 0.03,
+            "risk_max_consecutive_losses": 3,
         },
         "aggressive": {
             "max_symbols": 900,
@@ -363,6 +393,10 @@ def _default_auto_trader_presets() -> dict[str, dict[str, float | int | str]]:
             "risk_max_risk_pct": 0.008,
             "risk_max_open_risk_pct": 0.02,
             "risk_max_position_pct": 0.05,
+            "risk_max_open_positions": 8,
+            "risk_symbol_cooldown_minutes": 20,
+            "risk_max_daily_drawdown_pct": 0.05,
+            "risk_max_consecutive_losses": 4,
         },
     }
 
@@ -421,6 +455,7 @@ with left:
             - **Additional symbols**: manually include symbols for targeted testing.
             - **Use max loops / Max loops**: stop automatically after a chosen number of loops.
             - **Start Auto Trader (Guarded)**: launches continuous US-market scanning with stricter risk limits.
+            - **Auto breaker guardrails**: halt trading after drawdown/loss streak limits and enforce symbol cooldowns.
             """
         )
     if "account_mode" not in st.session_state:
@@ -730,6 +765,43 @@ with left:
                 key="auto_risk_max_position_pct",
                 help="Maximum position notional as a fraction of equity.",
             )
+            auto_risk_max_open_positions = st.number_input(
+                "Auto max open positions",
+                min_value=0,
+                max_value=100,
+                value=5,
+                step=1,
+                key="auto_risk_max_open_positions",
+                help="Maximum simultaneous positions before new entries are blocked.",
+            )
+            auto_risk_symbol_cooldown_minutes = st.number_input(
+                "Auto symbol cooldown (minutes)",
+                min_value=0.0,
+                max_value=1440.0,
+                value=30.0,
+                step=1.0,
+                key="auto_risk_symbol_cooldown_minutes",
+                help="Wait time before re-entering a symbol after an exit.",
+            )
+            auto_risk_max_daily_drawdown_pct = st.number_input(
+                "Auto max daily drawdown",
+                min_value=0.0,
+                max_value=0.5,
+                value=0.03,
+                step=0.005,
+                format="%.3f",
+                key="auto_risk_max_daily_drawdown_pct",
+                help="Session halt threshold as fraction drawdown from starting equity.",
+            )
+            auto_risk_max_consecutive_losses = st.number_input(
+                "Auto max consecutive losses",
+                min_value=0,
+                max_value=50,
+                value=3,
+                step=1,
+                key="auto_risk_max_consecutive_losses",
+                help="Session halt threshold for losing exits in a row.",
+            )
 
     if load_preset_clicked:
         preset = presets.get(selected_preset_name)
@@ -744,6 +816,10 @@ with left:
             st.session_state["auto_risk_max_risk_pct"] = float(preset.get("risk_max_risk_pct", 0.005))
             st.session_state["auto_risk_max_open_risk_pct"] = float(preset.get("risk_max_open_risk_pct", 0.01))
             st.session_state["auto_risk_max_position_pct"] = float(preset.get("risk_max_position_pct", 0.03))
+            st.session_state["auto_risk_max_open_positions"] = int(preset.get("risk_max_open_positions", 5))
+            st.session_state["auto_risk_symbol_cooldown_minutes"] = float(preset.get("risk_symbol_cooldown_minutes", 30))
+            st.session_state["auto_risk_max_daily_drawdown_pct"] = float(preset.get("risk_max_daily_drawdown_pct", 0.03))
+            st.session_state["auto_risk_max_consecutive_losses"] = int(preset.get("risk_max_consecutive_losses", 3))
             st.success(f"Loaded preset: {selected_preset_name}")
             st.rerun()
 
@@ -761,6 +837,10 @@ with left:
                 "risk_max_risk_pct": float(auto_risk_max_risk_pct),
                 "risk_max_open_risk_pct": float(auto_risk_max_open_risk_pct),
                 "risk_max_position_pct": float(auto_risk_max_position_pct),
+                "risk_max_open_positions": int(auto_risk_max_open_positions),
+                "risk_symbol_cooldown_minutes": float(auto_risk_symbol_cooldown_minutes),
+                "risk_max_daily_drawdown_pct": float(auto_risk_max_daily_drawdown_pct),
+                "risk_max_consecutive_losses": int(auto_risk_max_consecutive_losses),
             }
             _save_auto_trader_presets(presets)
             st.session_state["auto_preset_selected"] = name
@@ -830,6 +910,10 @@ with left:
                 risk_max_risk_pct=float(auto_risk_max_risk_pct),
                 risk_max_open_risk_pct=float(auto_risk_max_open_risk_pct),
                 risk_max_position_pct=float(auto_risk_max_position_pct),
+                risk_max_open_positions=int(auto_risk_max_open_positions),
+                risk_symbol_cooldown_minutes=float(auto_risk_symbol_cooldown_minutes),
+                risk_max_daily_drawdown_pct=float(auto_risk_max_daily_drawdown_pct),
+                risk_max_consecutive_losses=int(auto_risk_max_consecutive_losses),
             )
             state = _start_background(auto_args, env_overrides=env_overrides)
             state["account_mode"] = account_mode
@@ -868,6 +952,29 @@ with left:
                 _read_last_lines(WATCHDOG_LOG_FILE, max_lines=60, newest_first=True),
                 height=130,
             )
+
+    runtime_status = _load_runtime_status()
+    if runtime_status:
+        st.caption("Runtime Circuit Breakers")
+        st.write(f"Runtime status: **{runtime_status.get('status', 'unknown')}**")
+        if runtime_status.get("halt_reason"):
+            st.error(f"Halt reason: {runtime_status.get('halt_reason')}")
+        if runtime_status.get("message"):
+            st.write(f"Runtime note: {runtime_status.get('message')}")
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Consecutive Losses", int(runtime_status.get("consecutive_losses", 0)))
+        c2.metric("Active Positions", int(runtime_status.get("active_positions", 0)))
+        c3.metric("Session P/L", f"${float(runtime_status.get('session_pnl', 0.0)):,.2f}")
+
+        breakers = runtime_status.get("circuit_breakers", {}) or {}
+        st.write(
+            "Configured breakers | "
+            f"drawdown: {breakers.get('max_daily_drawdown_pct', 'N/A')} | "
+            f"consecutive losses: {breakers.get('max_consecutive_losses', 'N/A')} | "
+            f"max open positions: {breakers.get('max_open_positions', 'N/A')} | "
+            f"cooldown min: {breakers.get('symbol_cooldown_minutes', 'N/A')}"
+        )
 
     start_col, stop_col, req_stop_col, clear_stop_col = st.columns(4)
     with start_col:
