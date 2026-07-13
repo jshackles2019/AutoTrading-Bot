@@ -157,6 +157,28 @@ def _resolve_scanner_config(config: Dict[str, Any], args: argparse.Namespace) ->
     return scanner
 
 
+def _resolve_risk_config(config: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
+    """Resolve risk configuration from settings + CLI overrides."""
+    risk = dict(config.get("risk", {}))
+
+    if args.risk_max_risk_pct is not None:
+        risk["max_risk_pct"] = args.risk_max_risk_pct
+    if args.risk_max_trades_per_day is not None:
+        risk["max_trades_per_day"] = args.risk_max_trades_per_day
+    if args.risk_max_open_risk_pct is not None:
+        risk["max_open_risk_pct"] = args.risk_max_open_risk_pct
+    if args.risk_max_position_pct is not None:
+        risk["max_position_pct"] = args.risk_max_position_pct
+
+    risk.setdefault("max_risk_pct", 0.01)
+    risk.setdefault("max_trades_per_day", 3)
+    risk.setdefault("max_open_risk_pct", 0.03)
+    risk.setdefault("max_position_pct", 0.05)
+
+    config["risk"] = risk
+    return risk
+
+
 class TradingSession:
     """Manages a single trading session."""
     
@@ -810,6 +832,14 @@ def main():
                         help="Score weight for volume-ratio component")
     parser.add_argument("--weight-momentum", type=float, default=None,
                         help="Score weight for momentum component")
+    parser.add_argument("--risk-max-trades-per-day", type=int, default=None,
+                        help="Risk guardrail override: max trades allowed per day")
+    parser.add_argument("--risk-max-risk-pct", type=float, default=None,
+                        help="Risk guardrail override: max equity risk per trade")
+    parser.add_argument("--risk-max-open-risk-pct", type=float, default=None,
+                        help="Risk guardrail override: max total open risk as equity fraction")
+    parser.add_argument("--risk-max-position-pct", type=float, default=None,
+                        help="Risk guardrail override: max position notional as equity fraction")
     args = parser.parse_args()
 
     print("\n" + "="*60)
@@ -829,6 +859,7 @@ def main():
         )
         config["symbols"] = resolved_symbols
         scanner_cfg = _resolve_scanner_config(config, args)
+        risk_cfg = _resolve_risk_config(config, args)
 
         print(f"[OK] Config loaded")
         print(f"  Symbols ({len(config.get('symbols', []))}): {config.get('symbols')[:10]}")
@@ -844,7 +875,10 @@ def main():
         print(f"  Scan max symbols: {scanner_cfg.get('max_symbols') or 'unlimited'}")
         print(f"  Scan selection: {scanner_cfg.get('scan_selection')}")
         print(f"  Timeframe: {config.get('timeframe')}")
-        print(f"  Max trades/day: {config.get('risk', {}).get('max_trades_per_day')}")
+        print(f"  Max trades/day: {risk_cfg.get('max_trades_per_day')}")
+        print(f"  Max risk/trade: {risk_cfg.get('max_risk_pct')}")
+        print(f"  Max open risk: {risk_cfg.get('max_open_risk_pct')}")
+        print(f"  Max position size: {risk_cfg.get('max_position_pct')}")
 
         if args.smoke_test:
             return _run_smoke_test()

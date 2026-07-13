@@ -281,6 +281,33 @@ def _format_status(value: object) -> str:
     return text or "Unavailable"
 
 
+def _build_auto_trader_args(*, dry_run: bool) -> list[str]:
+    """Build guarded continuous-scan args for one-click auto trader mode."""
+    args = [
+        "--symbol-universe",
+        "us-all",
+        "--max-symbols",
+        "500",
+        "--scan-selection",
+        "rotating",
+        "--top-candidates",
+        "25",
+        "--min-average-volume",
+        "100000",
+        "--risk-max-trades-per-day",
+        "2",
+        "--risk-max-risk-pct",
+        "0.005",
+        "--risk-max-open-risk-pct",
+        "0.01",
+        "--risk-max-position-pct",
+        "0.03",
+    ]
+    if dry_run:
+        args.append("--dry-run")
+    return args
+
+
 st.title("Breakout Trading Bot")
 st.caption("Control dry-runs, run smoke tests, and inspect logs/trades in one place.")
 
@@ -312,6 +339,7 @@ with left:
             - **Volume ratio cap**: prevent very large volume spikes from dominating the score.
             - **Additional symbols**: manually include symbols for targeted testing.
             - **Use max loops / Max loops**: stop automatically after a chosen number of loops.
+            - **Start Auto Trader (Guarded)**: launches continuous US-market scanning with stricter risk limits.
             """
         )
     if "account_mode" not in st.session_state:
@@ -454,7 +482,7 @@ with left:
 
     max_loops_enabled = st.toggle(
         "Use max loops",
-        value=True,
+        value=False,
         help="Automatically stop after N loops instead of running indefinitely.",
     )
     max_loops = st.number_input(
@@ -504,6 +532,25 @@ with left:
     with smoke_col:
         smoke_clicked = st.button("Run Smoke Test", use_container_width=True)
 
+    st.caption("Auto trader quick start")
+    auto_col1, auto_col2 = st.columns(2)
+    with auto_col1:
+        auto_trader_dry_run = st.toggle(
+            "Auto trader dry run",
+            value=True,
+            help="Run continuous guarded scanning without placing live orders.",
+        )
+    with auto_col2:
+        start_auto_bg_clicked = st.button("Start Auto Trader (Guarded)", use_container_width=True)
+
+    auto_live_confirm_token = ""
+    if live_guard_required and not auto_trader_dry_run:
+        auto_live_confirm_token = st.text_input(
+            "Live auto-trader confirmation token",
+            placeholder="LIVE-TRADE-YES",
+            help="Required to start guarded auto trader in live non-dry-run mode.",
+        )
+
     if smoke_clicked:
         rc, out, err = _run_python(["--smoke-test"], env_overrides=env_overrides)
         st.session_state["last_run"] = {
@@ -527,6 +574,20 @@ with left:
                 "out": out,
                 "err": err,
             }
+
+    if start_auto_bg_clicked:
+        if _is_bg_running():
+            st.warning("Background process is already running.")
+        elif live_guard_required and not auto_trader_dry_run and auto_live_confirm_token != "LIVE-TRADE-YES":
+            st.error("Live auto trader blocked. Enter token LIVE-TRADE-YES to proceed.")
+        else:
+            _clear_scan_stop()
+            auto_args = _build_auto_trader_args(dry_run=auto_trader_dry_run)
+            state = _start_background(auto_args, env_overrides=env_overrides)
+            state["account_mode"] = account_mode
+            state["mode"] = "auto_trader_guarded"
+            _save_bg_state(state)
+            st.success(f"Guarded auto trader started (PID {state['pid']}).")
 
     st.divider()
     st.subheader("Background Runner")

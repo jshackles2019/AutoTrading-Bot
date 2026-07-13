@@ -25,6 +25,9 @@ loop_interval_seconds: 60
 risk:
   max_risk_pct: 0.01   # 1% of equity
   max_trades_per_day: 3
+  max_open_risk_pct: 0.03
+  max_position_pct: 0.05
+  min_shares: 1
   volume_threshold_factor: 1.5
 
 scanner:
