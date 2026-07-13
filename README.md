@@ -22,10 +22,18 @@ Create `.env` in the repo root and set:
 ALPACA_KEY_ID=your_key
 ALPACA_SECRET_KEY=your_secret
 ALPACA_PAPER=True
+DISCORD_WEBHOOK_URL=
+DISCORD_NOTIFY_EVENTS=
 ```
 
 `ALPACA_PAPER=True` means paper account mode by default.
 Set `ALPACA_PAPER=False` only when you intentionally want live trading mode.
+
+Discord notifications are optional:
+- `DISCORD_WEBHOOK_URL`: Discord incoming webhook URL
+- `DISCORD_NOTIFY_EVENTS`: comma-separated event keys to send (optional)
+  - Python defaults: `circuit_halt,fatal_error,session_summary,watchdog_restart,watchdog_stop`
+  - Watchdog defaults when unset: `watchdog_restart,watchdog_stop`
 
 Update `config/settings.yaml` for symbols/timeframe/risk values.
 
@@ -228,6 +236,13 @@ Runtime reset controls:
 - CLI equivalents:
   - `--reset-runtime-status`
   - `--reset-runtime-clear-cooldowns` (used with `--reset-runtime-status`)
+
+Notification event keys:
+- `circuit_halt`: circuit breaker halts a session
+- `fatal_error`: unhandled runtime failure in trading loop
+- `session_summary`: session summary posted at session close
+- `watchdog_restart`: watchdog restarting bot after non-zero exit
+- `watchdog_stop`: watchdog stops (clean exit, stop flag, breaker-halt, or max restarts)
 
 The script sets `ALPACA_PAPER` automatically per run:
 - `-AccountMode paper` => `ALPACA_PAPER=True`

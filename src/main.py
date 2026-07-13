@@ -18,6 +18,7 @@ import statistics
 
 try:
     from src import alpaca_client, utils
+    from src.notifier import notify_discord
     from src.strategy_breakout import evaluate as evaluate_strategy
     from src.risk_manager import evaluate as evaluate_risk
     from src.executor import submit_order, close_position
@@ -25,6 +26,7 @@ try:
 except ImportError:
     import alpaca_client
     import utils
+    from notifier import notify_discord
     from strategy_breakout import evaluate as evaluate_strategy
     from risk_manager import evaluate as evaluate_risk
     from executor import submit_order, close_position
@@ -308,6 +310,11 @@ class TradingSession:
         self.halt_reason = reason
         self.logger.logger.error(f"CIRCUIT BREAKER TRIGGERED | {reason}")
         self._write_runtime_status("halted", reason, account_equity=account_equity)
+        notify_discord(
+            "circuit_halt",
+            f"Reason: {reason}\nMode: {'DRY-RUN' if self.dry_run else 'LIVE'}\nEquity: {account_equity}",
+            title="Breakout Bot Circuit Breaker Halted",
+        )
 
     def _check_circuit_breakers(self, account: Dict[str, Any]) -> bool:
         """Return True when a circuit-breaker should stop the session."""
@@ -434,6 +441,11 @@ class TradingSession:
         except Exception as e:
             self.logger.log_error(f"Fatal error in trading loop: {e}", exc_info=e)
             self._write_runtime_status("error", f"Fatal error: {e}")
+            notify_discord(
+                "fatal_error",
+                f"Fatal error in trading loop: {e}",
+                title="Breakout Bot Fatal Error",
+            )
         finally:
             self._close_session()
             _clear_active_bot_process_state()
@@ -920,6 +932,14 @@ class TradingSession:
         
         self.logger.log_summary(self.session_start, session_end, self.trades_closed,
                                self.session_pnl, win_rate)
+        summary_text = (
+            f"Duration: {session_end - self.session_start}\n"
+            f"Trades: {self.trades_closed}\n"
+            f"P/L: {self.session_pnl:+.2f}\n"
+            f"Win Rate: {win_rate:.1f}%\n"
+            f"Status: {'HALTED' if self.halt_reason else 'ENDED'}"
+        )
+        notify_discord("session_summary", summary_text, title="Breakout Bot Session Summary")
         if self.halt_reason:
             self._write_runtime_status("halted", self.halt_reason)
         else:

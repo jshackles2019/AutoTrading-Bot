@@ -51,6 +51,18 @@ $watchdogLogPath = Join-Path $dataLogsDir "watchdog_runner.log"
 $watchdogStopFlagPath = Join-Path $dataUiDir "watchdog_stop.flag"
 $runtimeStatusPath = Join-Path $dataUiDir "runtime_status.json"
 
+$discordWebhookUrl = [string]$env:DISCORD_WEBHOOK_URL
+$discordNotifyEventsRaw = [string]$env:DISCORD_NOTIFY_EVENTS
+if ([string]::IsNullOrWhiteSpace($discordNotifyEventsRaw)) {
+    $discordNotifyEvents = @("watchdog_restart", "watchdog_stop")
+} else {
+    $discordNotifyEvents = @(
+        $discordNotifyEventsRaw.Split(",") |
+        ForEach-Object { $_.Trim().ToLowerInvariant() } |
+        Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+}
+
 New-Item -ItemType Directory -Force -Path $dataUiDir | Out-Null
 New-Item -ItemType Directory -Force -Path $dataLogsDir | Out-Null
 
@@ -71,6 +83,28 @@ function Write-WatchdogLog {
     Param([string]$Message)
     $line = "[{0}] {1}" -f (Get-Date).ToString("s"), $Message
     Add-Content -Path $watchdogLogPath -Value $line -Encoding utf8
+}
+
+function Send-DiscordNotification {
+    Param(
+        [string]$EventName,
+        [string]$Message,
+        [string]$Title = "Breakout Bot"
+    )
+    if ([string]::IsNullOrWhiteSpace($discordWebhookUrl)) {
+        return
+    }
+    $eventKey = $EventName.Trim().ToLowerInvariant()
+    if ($discordNotifyEvents -notcontains $eventKey) {
+        return
+    }
+    $content = "**$Title**`n$Message`n$([DateTime]::Now.ToString('s'))"
+    $payload = @{ content = $content }
+    try {
+        Invoke-RestMethod -Method Post -Uri $discordWebhookUrl -ContentType "application/json" -Body ($payload | ConvertTo-Json -Depth 3) | Out-Null
+    } catch {
+        Write-WatchdogLog "Discord notify failed for ${eventKey}: $($_.Exception.Message)"
+    }
 }
 
 function Write-WatchdogState {
@@ -255,6 +289,7 @@ while ($true) {
     if (Test-Path $watchdogStopFlagPath) {
         Write-WatchdogState -Status "stopped_by_flag" -RestartCount $restartCount -LastExitCode $lastExitCode -Command $cmdLine -Message "Stop flag detected." -NextRestartAt $null
         Write-WatchdogLog "Stop flag detected. Watchdog exiting."
+        Send-DiscordNotification -EventName "watchdog_stop" -Title "Watchdog Stopped" -Message "Stop flag detected; watchdog exiting."
         exit 0
     }
 
@@ -278,12 +313,14 @@ while ($true) {
         $finalExitCode = if ($lastExitCode -eq 0) { 2 } else { $lastExitCode }
         Write-WatchdogState -Status "halted_runtime_breaker" -RestartCount $restartCount -LastExitCode $finalExitCode -Command $cmdLine -Message "Bot halted by circuit breaker; watchdog will not restart." -NextRestartAt $null
         Write-WatchdogLog "Runtime status is halted. Watchdog stopping restarts. Reason: $haltReason"
+        Send-DiscordNotification -EventName "watchdog_stop" -Title "Watchdog Paused By Circuit Breaker" -Message "Watchdog will not restart. Reason: $haltReason"
         exit $finalExitCode
     }
 
     if ($lastExitCode -eq 0) {
         Write-WatchdogState -Status "exited_cleanly" -RestartCount $restartCount -LastExitCode $lastExitCode -Command $cmdLine -Message "Bot exited with code 0." -NextRestartAt $null
         Write-WatchdogLog "Bot exited cleanly (exit_code=0)."
+        Send-DiscordNotification -EventName "watchdog_stop" -Title "Watchdog Exited Cleanly" -Message "Bot exited with code 0."
         exit 0
     }
 
@@ -291,6 +328,7 @@ while ($true) {
     if ($restartCount -gt $WatchdogMaxRestarts) {
         Write-WatchdogState -Status "halted_max_restarts" -RestartCount $restartCount -LastExitCode $lastExitCode -Command $cmdLine -Message "Maximum restart limit reached." -NextRestartAt $null
         Write-WatchdogLog "Maximum restart limit reached. Halting watchdog (last_exit_code=$lastExitCode)."
+        Send-DiscordNotification -EventName "watchdog_stop" -Title "Watchdog Max Restarts Reached" -Message "Watchdog halted after max restarts. Last exit code: $lastExitCode"
         exit $lastExitCode
     }
 
@@ -302,5 +340,6 @@ while ($true) {
 
     Write-WatchdogState -Status "restarting" -RestartCount $restartCount -LastExitCode $lastExitCode -Command $cmdLine -Message "Restarting after failure with backoff." -NextRestartAt $nextRestart
     Write-WatchdogLog "Bot exited with code $lastExitCode. Restarting in $backoffSeconds second(s) (attempt $restartCount/$WatchdogMaxRestarts)."
+    Send-DiscordNotification -EventName "watchdog_restart" -Title "Watchdog Restart" -Message "Exit code $lastExitCode. Restarting in $backoffSeconds second(s) (attempt $restartCount/$WatchdogMaxRestarts)."
     Start-Sleep -Seconds $backoffSeconds
 }
