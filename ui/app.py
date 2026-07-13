@@ -106,6 +106,20 @@ def _scan_stop_requested() -> bool:
     return STOP_SCANS_FLAG_FILE.exists()
 
 
+def _clear_application_logs() -> tuple[int, int]:
+    """Truncate log files so the UI/log directory does not grow indefinitely."""
+    DATA_LOGS.mkdir(parents=True, exist_ok=True)
+    truncated = 0
+    failed = 0
+    for log_path in DATA_LOGS.glob("*.log"):
+        try:
+            log_path.write_text("", encoding="utf-8")
+            truncated += 1
+        except Exception:
+            failed += 1
+    return truncated, failed
+
+
 def _pid_running(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -428,6 +442,23 @@ with left:
     if clear_scan_stop_clicked:
         _clear_scan_stop()
         st.success("Manual stop flag cleared.")
+
+    clear_logs_confirm = st.checkbox(
+        "Confirm clear log files",
+        value=False,
+        help="Truncates all .log files under data/logs.",
+    )
+    clear_logs_clicked = st.button("Clear Logs", use_container_width=True)
+    if clear_logs_clicked:
+        if not clear_logs_confirm:
+            st.warning("Enable confirmation before clearing log files.")
+        else:
+            truncated, failed = _clear_application_logs()
+            st.session_state.pop("last_run", None)
+            if failed == 0:
+                st.success(f"Cleared {truncated} log file(s).")
+            else:
+                st.warning(f"Cleared {truncated} log file(s), failed on {failed} file(s).")
 
     if start_bg_clicked:
         if _is_bg_running():
