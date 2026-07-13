@@ -197,6 +197,7 @@ def _resolve_risk_config(config: Dict[str, Any], args: argparse.Namespace) -> Di
 def _resolve_automation_config(config: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
     """Resolve automation controls (schedule gate) from settings + CLI overrides."""
     automation = dict(config.get("automation", {}))
+    preflight = dict(automation.get("preflight", {}))
     trading_window = dict(automation.get("trading_window", {}))
 
     if args.schedule_enabled and args.schedule_disabled:
@@ -227,6 +228,11 @@ def _resolve_automation_config(config: Dict[str, Any], args: argparse.Namespace)
     trading_window.setdefault("end", "16:00")
     trading_window.setdefault("weekdays", [0, 1, 2, 3, 4])
 
+    preflight.setdefault("enabled", True)
+    preflight.setdefault("max_market_data_age_minutes", 20)
+    preflight.setdefault("symbols_to_check", 3)
+
+    automation["preflight"] = preflight
     automation["trading_window"] = trading_window
     config["automation"] = automation
     return automation
@@ -273,6 +279,8 @@ class TradingSession:
         self.entry_lockout_reason: Optional[str] = None
         self._schedule_notified = False
         self.preflight_enabled = True
+        self.preflight_max_market_data_age_minutes = 20.0
+        self.preflight_symbols_to_check = 3
 
         risk_cfg = self.config.get("risk", {})
         self.max_daily_drawdown_pct = risk_cfg.get("max_daily_drawdown_pct")
@@ -285,6 +293,8 @@ class TradingSession:
         preflight_cfg = automation_cfg.get("preflight", {}) if isinstance(automation_cfg, dict) else {}
         schedule_cfg = automation_cfg.get("trading_window", {}) if isinstance(automation_cfg, dict) else {}
         self.preflight_enabled = bool(preflight_cfg.get("enabled", True))
+        self.preflight_max_market_data_age_minutes = float(preflight_cfg.get("max_market_data_age_minutes", 20) or 20)
+        self.preflight_symbols_to_check = max(1, int(preflight_cfg.get("symbols_to_check", 3) or 3))
         self.schedule_enabled = bool(schedule_cfg.get("enabled", False))
         self.schedule_start = str(schedule_cfg.get("start", "09:30"))
         self.schedule_end = str(schedule_cfg.get("end", "16:00"))
@@ -420,6 +430,79 @@ class TradingSession:
         notify_discord("preflight_block", reason, title="Breakout Bot Preflight Blocked")
         return False
 
+    def _coerce_bar_timestamp_market(self, raw_timestamp: Any) -> Optional[datetime]:
+        """Normalize Alpaca bar timestamps to market timezone for age checks."""
+        ts: Optional[datetime] = None
+
+        if isinstance(raw_timestamp, datetime):
+            ts = raw_timestamp
+        elif isinstance(raw_timestamp, str):
+            value = raw_timestamp.strip()
+            if value.endswith("Z"):
+                value = value[:-1] + "+00:00"
+            try:
+                ts = datetime.fromisoformat(value)
+            except Exception:
+                ts = None
+
+        if ts is None:
+            return None
+
+        if ts.tzinfo is None:
+            ts = utils.UTC_TZ.localize(ts).astimezone(utils.MARKET_TZ)
+        else:
+            ts = ts.astimezone(utils.MARKET_TZ)
+        return ts
+
+    def _check_market_data_freshness(self) -> Optional[str]:
+        """Return a failure reason when startup market data appears stale or skewed."""
+        if self.preflight_max_market_data_age_minutes <= 0:
+            return None
+
+        # Skip stale-data checks outside market hours to reduce false positives.
+        if not utils.is_market_open():
+            return None
+
+        symbols = [str(s).upper() for s in self.config.get("symbols", []) if str(s).strip()]
+        if not symbols:
+            return "No symbols configured for market-data freshness check"
+
+        now_market = utils.now_market()
+        checked_symbols = symbols[: self.preflight_symbols_to_check]
+        stale_notes: List[str] = []
+
+        for symbol in checked_symbols:
+            try:
+                bars = alpaca_client.get_bars(symbol, self.config.get("timeframe", "5Min"), lookback=1)
+            except Exception as e:
+                return f"Failed fetching preflight bars for {symbol}: {e}"
+
+            if not bars:
+                stale_notes.append(f"{symbol}=no_bars")
+                continue
+
+            bar_ts = self._coerce_bar_timestamp_market(bars[-1].get("timestamp"))
+            if bar_ts is None:
+                stale_notes.append(f"{symbol}=invalid_timestamp")
+                continue
+
+            age_minutes = (now_market - bar_ts).total_seconds() / 60.0
+            if age_minutes < -2.0:
+                return (
+                    f"Clock skew detected: latest bar for {symbol} is {abs(age_minutes):.1f} minute(s) "
+                    "in the future"
+                )
+            if age_minutes > self.preflight_max_market_data_age_minutes:
+                stale_notes.append(f"{symbol}={age_minutes:.1f}m_old")
+
+        if stale_notes:
+            return (
+                "Market data freshness check failed "
+                f"(max_age={self.preflight_max_market_data_age_minutes}m): "
+                + ", ".join(stale_notes)
+            )
+        return None
+
     def _run_preflight_gate(self, account: Dict[str, Any]) -> bool:
         """Run startup preflight checks and return True only when safe to proceed."""
         if not self.preflight_enabled:
@@ -448,6 +531,13 @@ class TradingSession:
         if self.halt_reason:
             return self._fail_preflight(
                 f"Prior halt state present: {self.halt_reason}",
+                account_equity=float(account.get("equity", 0.0) or 0.0),
+            )
+
+        freshness_failure = self._check_market_data_freshness()
+        if freshness_failure:
+            return self._fail_preflight(
+                freshness_failure,
                 account_equity=float(account.get("equity", 0.0) or 0.0),
             )
 
@@ -484,6 +574,8 @@ class TradingSession:
                 },
                 "preflight": {
                     "enabled": self.preflight_enabled,
+                    "max_market_data_age_minutes": self.preflight_max_market_data_age_minutes,
+                    "symbols_to_check": self.preflight_symbols_to_check,
                 },
                 "symbol_cooldowns": self.symbol_cooldowns,
             }
@@ -1323,6 +1415,13 @@ def main():
         print(f"  Symbol cooldown (min): {risk_cfg.get('symbol_cooldown_minutes')}")
         print(f"  Max daily drawdown: {risk_cfg.get('max_daily_drawdown_pct')}")
         print(f"  Max consecutive losses: {risk_cfg.get('max_consecutive_losses')}")
+        preflight_cfg = automation_cfg.get("preflight", {})
+        print(
+            "  Preflight: "
+            f"enabled={preflight_cfg.get('enabled')} "
+            f"max_market_data_age_minutes={preflight_cfg.get('max_market_data_age_minutes')} "
+            f"symbols_to_check={preflight_cfg.get('symbols_to_check')}"
+        )
         trading_window_cfg = automation_cfg.get("trading_window", {})
         print(
             "  Schedule gate: "

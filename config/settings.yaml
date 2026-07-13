@@ -25,6 +25,8 @@ loop_interval_seconds: 60
 automation:
   preflight:
     enabled: true
+    max_market_data_age_minutes: 20
+    symbols_to_check: 3
   trading_window:
     enabled: true
     start: "09:30"

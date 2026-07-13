@@ -41,7 +41,9 @@ Param(
     [switch]$AllowLockoutStart,
     [int]$WatchdogMaxRestarts = 10,
     [int]$WatchdogBaseBackoffSeconds = 5,
-    [int]$WatchdogMaxBackoffSeconds = 120
+    [int]$WatchdogMaxBackoffSeconds = 120,
+    [int]$WatchdogEscalationFailures = 5,
+    [int]$WatchdogEscalationWindowMinutes = 15
 )
 
 $requiredLiveToken = "LIVE-TRADE-YES"
@@ -60,7 +62,7 @@ $runtimeStatusPath = Join-Path $dataUiDir "runtime_status.json"
 $discordWebhookUrl = [string]$env:DISCORD_WEBHOOK_URL
 $discordNotifyEventsRaw = [string]$env:DISCORD_NOTIFY_EVENTS
 if ([string]::IsNullOrWhiteSpace($discordNotifyEventsRaw)) {
-    $discordNotifyEvents = @("watchdog_restart", "watchdog_stop")
+    $discordNotifyEvents = @("watchdog_restart", "watchdog_stop", "watchdog_escalation")
 } else {
     $discordNotifyEvents = @(
         $discordNotifyEventsRaw.Split(",") |
@@ -299,6 +301,12 @@ if ($WatchdogBaseBackoffSeconds -lt 1) {
 if ($WatchdogMaxBackoffSeconds -lt $WatchdogBaseBackoffSeconds) {
     throw "WatchdogMaxBackoffSeconds must be >= WatchdogBaseBackoffSeconds"
 }
+if ($WatchdogEscalationFailures -lt 1) {
+    throw "WatchdogEscalationFailures must be >= 1"
+}
+if ($WatchdogEscalationWindowMinutes -lt 1) {
+    throw "WatchdogEscalationWindowMinutes must be >= 1"
+}
 
 $runtimePreflight = Get-RuntimeStatus
 if ($runtimePreflight -and [bool]$runtimePreflight.entry_lockout -and -not $AllowLockoutStart) {
@@ -314,10 +322,11 @@ if ($runtimePreflight -and [bool]$runtimePreflight.entry_lockout -and -not $Allo
 }
 
 Write-Host "Watchdog mode enabled (max restarts: $WatchdogMaxRestarts, backoff: $WatchdogBaseBackoffSeconds-$WatchdogMaxBackoffSeconds s)."
-Write-WatchdogLog "Watchdog started | command=$cmdLine"
+Write-WatchdogLog "Watchdog started | command=$cmdLine | escalation=$WatchdogEscalationFailures failures in $WatchdogEscalationWindowMinutes minute(s)"
 
 $restartCount = 0
 $lastExitCode = 0
+$failureTimestamps = @()
 
 while ($true) {
     if (Test-Path $watchdogStopFlagPath) {
@@ -356,6 +365,20 @@ while ($true) {
         Write-WatchdogLog "Bot exited cleanly (exit_code=0)."
         Send-DiscordNotification -EventName "watchdog_stop" -Title "Watchdog Exited Cleanly" -Message "Bot exited with code 0."
         exit 0
+    }
+
+    $now = Get-Date
+    $windowStart = $now.AddMinutes(-1 * $WatchdogEscalationWindowMinutes)
+    $failureTimestamps = @($failureTimestamps + $now | Where-Object { $_ -ge $windowStart })
+    $failureCountInWindow = $failureTimestamps.Count
+
+    if ($failureCountInWindow -ge $WatchdogEscalationFailures) {
+        $escalationMessage = "Failure burst detected: $failureCountInWindow failure(s) in the last $WatchdogEscalationWindowMinutes minute(s). Halting watchdog for manual investigation. Last exit code: $lastExitCode"
+        Write-WatchdogState -Status "halted_failure_burst" -RestartCount $restartCount -LastExitCode $lastExitCode -Command $cmdLine -Message $escalationMessage -NextRestartAt $null
+        Write-WatchdogLog "HIGH PRIORITY | $escalationMessage"
+        Send-DiscordNotification -EventName "watchdog_escalation" -Title "HIGH PRIORITY: Watchdog Failure Burst Halt" -Message $escalationMessage
+        Send-DiscordNotification -EventName "watchdog_stop" -Title "HIGH PRIORITY: Watchdog Halted" -Message $escalationMessage
+        exit $lastExitCode
     }
 
     $restartCount += 1

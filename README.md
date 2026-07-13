@@ -33,7 +33,7 @@ Discord notifications are optional:
 - `DISCORD_WEBHOOK_URL`: Discord incoming webhook URL
 - `DISCORD_NOTIFY_EVENTS`: comma-separated event keys to send (optional)
   - Python defaults: `circuit_halt,fatal_error,preflight_block,reconciliation_mismatch,schedule_block,session_summary,watchdog_restart,watchdog_stop`
-  - Watchdog defaults when unset: `watchdog_restart,watchdog_stop`
+  - Watchdog defaults when unset: `watchdog_restart,watchdog_stop,watchdog_escalation`
 
 Update `config/settings.yaml` for symbols/timeframe/risk values.
 
@@ -199,6 +199,10 @@ Watchdog behavior:
 - If `data/ui/runtime_status.json` reports `status: halted`, watchdog stops restarts (`halted_runtime_breaker`).
 - Uses exponential backoff between restarts.
 - Stops after `-WatchdogMaxRestarts` attempts.
+- Escalates to a hard stop when failures burst above threshold:
+  - `-WatchdogEscalationFailures` failures within `-WatchdogEscalationWindowMinutes` minutes
+  - writes watchdog status `halted_failure_burst`
+  - sends a high-priority Discord alert (`watchdog_escalation`)
 - Writes state/log artifacts to:
   - `data/ui/watchdog_state.json`
   - `data/logs/watchdog_runner.log`
@@ -237,11 +241,15 @@ Strict trading schedule gate:
 
 Startup preflight gate:
 - Configured under `automation.preflight.enabled` in `config/settings.yaml` (default `true`).
+- Market-data freshness controls are under `automation.preflight`:
+  - `max_market_data_age_minutes` (default `20`)
+  - `symbols_to_check` (default `3`)
 - Blocks startup if any check fails, writing `status=blocked_preflight` to runtime status:
   - account status is not active
   - buying power is non-positive/unavailable
   - prior entry lockout is still active
   - prior halt reason is still present
+  - stale or invalid latest market-data timestamps while market is open
 - Sends `preflight_block` Discord event when a preflight check blocks startup.
 
 Startup reconciliation safe mode:
@@ -273,6 +281,7 @@ Notification event keys:
 - `session_summary`: session summary posted at session close
 - `watchdog_restart`: watchdog restarting bot after non-zero exit
 - `watchdog_stop`: watchdog stops (clean exit, stop flag, breaker-halt, or max restarts)
+- `watchdog_escalation`: watchdog halted due to failure burst escalation policy
 
 The script sets `ALPACA_PAPER` automatically per run:
 - `-AccountMode paper` => `ALPACA_PAPER=True`
