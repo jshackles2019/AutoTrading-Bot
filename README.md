@@ -180,8 +180,15 @@ Paper mode with explicit circuit-breaker guardrails:
 ./scripts/run_bot.ps1 -AccountMode paper -DryRun -SkipMarketCheck -Watchdog -RiskMaxOpenPositions 5 -RiskSymbolCooldownMinutes 30 -RiskMaxDailyDrawdownPct 0.03 -RiskMaxConsecutiveLosses 3
 ```
 
+Watchdog halt-policy smoke test (forces immediate halt):
+
+```powershell
+./scripts/run_bot.ps1 -AccountMode paper -DryRun -SkipMarketCheck -Watchdog -TestForceHaltAfterLoops 0 -TestForceHaltReason "watchdog halt test"
+```
+
 Watchdog behavior:
 - Restarts bot process on non-zero exit codes.
+- If `data/ui/runtime_status.json` reports `status: halted`, watchdog stops restarts (`halted_runtime_breaker`).
 - Uses exponential backoff between restarts.
 - Stops after `-WatchdogMaxRestarts` attempts.
 - Writes state/log artifacts to:
@@ -201,6 +208,10 @@ Risk override flags (supported by both `src/main.py` and `scripts/run_bot.ps1`):
 - `--risk-symbol-cooldown-minutes` / `-RiskSymbolCooldownMinutes`
 - `--risk-max-daily-drawdown-pct` / `-RiskMaxDailyDrawdownPct`
 - `--risk-max-consecutive-losses` / `-RiskMaxConsecutiveLosses`
+
+Test hook flags (supported by both `src/main.py` and `scripts/run_bot.ps1`):
+- `--test-force-halt-after-loops` / `-TestForceHaltAfterLoops`
+- `--test-force-halt-reason` / `-TestForceHaltReason`
 
 Deterministic test hook flags (CLI only, useful for automated circuit-breaker tests):
 - `--test-force-halt-after-loops N` forces a halted runtime state after loop `N` (`0` = immediate).

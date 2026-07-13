@@ -30,6 +30,8 @@ Param(
     [double]$RiskSymbolCooldownMinutes,
     [double]$RiskMaxDailyDrawdownPct,
     [int]$RiskMaxConsecutiveLosses,
+    [int]$TestForceHaltAfterLoops,
+    [string]$TestForceHaltReason,
     [switch]$Watchdog,
     [int]$WatchdogMaxRestarts = 10,
     [int]$WatchdogBaseBackoffSeconds = 5,
@@ -47,6 +49,7 @@ $dataLogsDir = Join-Path $repoRoot "data\logs"
 $watchdogStatePath = Join-Path $dataUiDir "watchdog_state.json"
 $watchdogLogPath = Join-Path $dataLogsDir "watchdog_runner.log"
 $watchdogStopFlagPath = Join-Path $dataUiDir "watchdog_stop.flag"
+$runtimeStatusPath = Join-Path $dataUiDir "runtime_status.json"
 
 New-Item -ItemType Directory -Force -Path $dataUiDir | Out-Null
 New-Item -ItemType Directory -Force -Path $dataLogsDir | Out-Null
@@ -90,10 +93,19 @@ function Write-WatchdogState {
         dry_run = [bool]$DryRun
         message = $Message
     }
-    if ($NextRestartAt) {
+    if ($null -ne $NextRestartAt -and $NextRestartAt.HasValue) {
         $payload.next_restart_at = $NextRestartAt.Value.ToString("o")
     }
     $payload | ConvertTo-Json -Depth 4 | Set-Content -Path $watchdogStatePath -Encoding utf8
+}
+
+function ConvertTo-QuotedArg {
+    Param([string]$Value)
+    if ($null -eq $Value) {
+        return '""'
+    }
+    $escaped = $Value -replace '"', '\\"'
+    return '"' + $escaped + '"'
 }
 
 function New-BotCommandParts {
@@ -183,6 +195,12 @@ function New-BotCommandParts {
     if ($BoundParams.ContainsKey("RiskMaxConsecutiveLosses")) {
         $parts += @("--risk-max-consecutive-losses", "$RiskMaxConsecutiveLosses")
     }
+    if ($BoundParams.ContainsKey("TestForceHaltAfterLoops")) {
+        $parts += @("--test-force-halt-after-loops", "$TestForceHaltAfterLoops")
+    }
+    if ($BoundParams.ContainsKey("TestForceHaltReason")) {
+        $parts += @("--test-force-halt-reason", (ConvertTo-QuotedArg -Value $TestForceHaltReason))
+    }
 
     return $parts
 }
@@ -193,6 +211,17 @@ function Invoke-BotProcess {
     return @{
         ExitCode = [int]$proc.ExitCode
         Pid = [int]$proc.Id
+    }
+}
+
+function Get-RuntimeStatus {
+    if (-not (Test-Path $runtimeStatusPath)) {
+        return $null
+    }
+    try {
+        return Get-Content -Path $runtimeStatusPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    } catch {
+        return $null
     }
 }
 
@@ -238,6 +267,18 @@ while ($true) {
     } catch {
         $lastExitCode = 1
         Write-WatchdogLog "Process launch failed: $($_.Exception.Message)"
+    }
+
+    $runtimeStatus = Get-RuntimeStatus
+    if ($runtimeStatus -and $runtimeStatus.status -eq "halted") {
+        $haltReason = [string]$runtimeStatus.halt_reason
+        if ([string]::IsNullOrWhiteSpace($haltReason)) {
+            $haltReason = "Runtime reported halted status"
+        }
+        $finalExitCode = if ($lastExitCode -eq 0) { 2 } else { $lastExitCode }
+        Write-WatchdogState -Status "halted_runtime_breaker" -RestartCount $restartCount -LastExitCode $finalExitCode -Command $cmdLine -Message "Bot halted by circuit breaker; watchdog will not restart." -NextRestartAt $null
+        Write-WatchdogLog "Runtime status is halted. Watchdog stopping restarts. Reason: $haltReason"
+        exit $finalExitCode
     }
 
     if ($lastExitCode -eq 0) {
