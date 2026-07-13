@@ -203,6 +203,7 @@ Watchdog behavior:
   - `data/ui/watchdog_state.json`
   - `data/logs/watchdog_runner.log`
 - Create `data/ui/watchdog_stop.flag` to request watchdog shutdown.
+- If runtime status reports `entry_lockout=true`, watchdog start is blocked (`blocked_preflight_lockout`) unless `-AllowLockoutStart` is set.
 
 Runtime status and circuit-breaker state is written to:
 - `data/ui/runtime_status.json`
@@ -348,6 +349,12 @@ Minimal ACL example (replace values for your tailnet):
   }
 }
 ```
+
+  Watchdog lockout override (use cautiously, after manual reconciliation review):
+
+  ```powershell
+  ./scripts/run_bot.ps1 -AccountMode paper -DryRun -SkipMarketCheck -Watchdog -AllowLockoutStart
+  ```
 
 Quick troubleshooting:
 - Verify Streamlit is running on host and bound to port `8501`.

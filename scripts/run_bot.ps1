@@ -33,6 +33,7 @@ Param(
     [int]$TestForceHaltAfterLoops,
     [string]$TestForceHaltReason,
     [switch]$Watchdog,
+    [switch]$AllowLockoutStart,
     [int]$WatchdogMaxRestarts = 10,
     [int]$WatchdogBaseBackoffSeconds = 5,
     [int]$WatchdogMaxBackoffSeconds = 120
@@ -277,6 +278,19 @@ if ($WatchdogBaseBackoffSeconds -lt 1) {
 }
 if ($WatchdogMaxBackoffSeconds -lt $WatchdogBaseBackoffSeconds) {
     throw "WatchdogMaxBackoffSeconds must be >= WatchdogBaseBackoffSeconds"
+}
+
+$runtimePreflight = Get-RuntimeStatus
+if ($runtimePreflight -and [bool]$runtimePreflight.entry_lockout -and -not $AllowLockoutStart) {
+    $lockoutReason = [string]$runtimePreflight.entry_lockout_reason
+    if ([string]::IsNullOrWhiteSpace($lockoutReason)) {
+        $lockoutReason = "Runtime status reports active entry lockout."
+    }
+    Write-WatchdogState -Status "blocked_preflight_lockout" -RestartCount 0 -LastExitCode 3 -Command $cmdLine -Message "Watchdog start blocked by active entry lockout. Use -AllowLockoutStart to override." -NextRestartAt $null
+    Write-WatchdogLog "Watchdog preflight blocked by entry lockout. Reason: $lockoutReason"
+    Send-DiscordNotification -EventName "watchdog_stop" -Title "Watchdog Preflight Blocked" -Message "Active entry lockout blocked watchdog start. Reason: $lockoutReason"
+    Write-Host "[ERR] Watchdog start blocked by active entry lockout. Use -AllowLockoutStart to override." -ForegroundColor Red
+    exit 3
 }
 
 Write-Host "Watchdog mode enabled (max restarts: $WatchdogMaxRestarts, backoff: $WatchdogBaseBackoffSeconds-$WatchdogMaxBackoffSeconds s)."
