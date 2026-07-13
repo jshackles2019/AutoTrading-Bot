@@ -202,6 +202,10 @@ Risk override flags (supported by both `src/main.py` and `scripts/run_bot.ps1`):
 - `--risk-max-daily-drawdown-pct` / `-RiskMaxDailyDrawdownPct`
 - `--risk-max-consecutive-losses` / `-RiskMaxConsecutiveLosses`
 
+Deterministic test hook flags (CLI only, useful for automated circuit-breaker tests):
+- `--test-force-halt-after-loops N` forces a halted runtime state after loop `N` (`0` = immediate).
+- `--test-force-halt-reason "text"` sets the halt reason written to `data/ui/runtime_status.json`.
+
 The script sets `ALPACA_PAPER` automatically per run:
 - `-AccountMode paper` => `ALPACA_PAPER=True`
 - `-AccountMode live` => `ALPACA_PAPER=False`

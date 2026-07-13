@@ -237,6 +237,11 @@ class TradingSession:
         self.symbol_cooldown_minutes = float(risk_cfg.get("symbol_cooldown_minutes", 0) or 0)
         self.session_start_equity: Optional[float] = None
 
+        # Optional deterministic test hook for circuit-breaker automation tests.
+        test_hooks = self.config.get("test_hooks", {}) if isinstance(self.config, dict) else {}
+        self.force_halt_after_loops = test_hooks.get("force_halt_after_loops")
+        self.force_halt_reason = str(test_hooks.get("force_halt_reason", "Forced halt test hook"))
+
     def _write_runtime_status(self, status: str, message: str, account_equity: Optional[float] = None) -> None:
         """Persist runtime/circuit-breaker status for the UI."""
         try:
@@ -297,6 +302,20 @@ class TradingSession:
 
         return False
 
+    def _check_test_hook_halt(self, loop_count: int, account_equity: Optional[float] = None) -> bool:
+        """Return True when deterministic halt test hook is configured and triggered."""
+        if self.force_halt_after_loops is None:
+            return False
+        try:
+            threshold = int(self.force_halt_after_loops)
+        except (TypeError, ValueError):
+            return False
+        if loop_count >= threshold:
+            reason = self.force_halt_reason or f"Forced halt test hook at loop {threshold}"
+            self._trigger_halt(reason, account_equity=account_equity)
+            return True
+        return False
+
     def _stop_requested(self) -> bool:
         """Check whether a manual scan-stop request has been signaled by the UI."""
         return STOP_SCANS_FLAG_PATH.exists()
@@ -340,6 +359,12 @@ class TradingSession:
                     account = account
 
                 if self._check_circuit_breakers(account):
+                    break
+
+                if self._check_test_hook_halt(
+                    loop_count,
+                    account_equity=float(account.get("equity", 0.0) or 0.0),
+                ):
                     break
 
                 self._write_runtime_status("running", "Trading loop active", account_equity=float(account.get("equity", 0.0) or 0.0))
@@ -964,6 +989,10 @@ def main():
                         help="Risk guardrail override: max drawdown from session-start equity")
     parser.add_argument("--risk-max-consecutive-losses", type=int, default=None,
                         help="Risk guardrail override: max consecutive losing exits before halt")
+    parser.add_argument("--test-force-halt-after-loops", type=int, default=None,
+                        help="Test hook: force a circuit-breaker halt after N loops (0 = immediate)")
+    parser.add_argument("--test-force-halt-reason", type=str, default="Forced halt test hook",
+                        help="Test hook: halt reason text written when forced halt triggers")
     args = parser.parse_args()
 
     print("\n" + "="*60)
@@ -984,6 +1013,14 @@ def main():
         config["symbols"] = resolved_symbols
         scanner_cfg = _resolve_scanner_config(config, args)
         risk_cfg = _resolve_risk_config(config, args)
+
+        if args.test_force_halt_after_loops is not None:
+            if args.test_force_halt_after_loops < 0:
+                print("\n[ERR] --test-force-halt-after-loops must be >= 0")
+                return 1
+            hooks = config.setdefault("test_hooks", {})
+            hooks["force_halt_after_loops"] = int(args.test_force_halt_after_loops)
+            hooks["force_halt_reason"] = str(args.test_force_halt_reason)
 
         print(f"[OK] Config loaded")
         print(f"  Symbols ({len(config.get('symbols', []))}): {config.get('symbols')[:10]}")
@@ -1007,6 +1044,8 @@ def main():
         print(f"  Symbol cooldown (min): {risk_cfg.get('symbol_cooldown_minutes')}")
         print(f"  Max daily drawdown: {risk_cfg.get('max_daily_drawdown_pct')}")
         print(f"  Max consecutive losses: {risk_cfg.get('max_consecutive_losses')}")
+        if args.test_force_halt_after_loops is not None:
+            print(f"  Test forced halt loops: {args.test_force_halt_after_loops}")
 
         if args.smoke_test:
             return _run_smoke_test()

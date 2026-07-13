@@ -454,6 +454,7 @@ with left:
             - **Volume ratio cap**: prevent very large volume spikes from dominating the score.
             - **Additional symbols**: manually include symbols for targeted testing.
             - **Use max loops / Max loops**: stop automatically after a chosen number of loops.
+            - **One-shot breaker overrides**: apply temporary breaker thresholds to a single one-shot run.
             - **Start Auto Trader (Guarded)**: launches continuous US-market scanning with stricter risk limits.
             - **Auto breaker guardrails**: halt trading after drawdown/loss streak limits and enforce symbol cooldowns.
             """
@@ -610,6 +611,49 @@ with left:
         help="Loop count used when max loops is enabled.",
     )
 
+    with st.expander("One-shot breaker overrides", expanded=False):
+        apply_one_shot_breakers = st.toggle(
+            "Apply one-shot breaker overrides",
+            value=False,
+            help="When enabled, one-shot run uses these breaker thresholds instead of config defaults.",
+        )
+        ob1, ob2 = st.columns(2)
+        with ob1:
+            one_shot_risk_max_open_positions = st.number_input(
+                "One-shot max open positions",
+                min_value=0,
+                max_value=100,
+                value=5,
+                step=1,
+                help="Maximum simultaneous positions allowed for this one-shot run.",
+            )
+            one_shot_risk_symbol_cooldown_minutes = st.number_input(
+                "One-shot symbol cooldown (minutes)",
+                min_value=0.0,
+                max_value=1440.0,
+                value=30.0,
+                step=1.0,
+                help="Cooldown window before re-entering the same symbol.",
+            )
+        with ob2:
+            one_shot_risk_max_daily_drawdown_pct = st.number_input(
+                "One-shot max daily drawdown",
+                min_value=0.0,
+                max_value=0.5,
+                value=0.03,
+                step=0.005,
+                format="%.3f",
+                help="Halt threshold as drawdown from session start equity.",
+            )
+            one_shot_risk_max_consecutive_losses = st.number_input(
+                "One-shot max consecutive losses",
+                min_value=0,
+                max_value=50,
+                value=3,
+                step=1,
+                help="Halt threshold for consecutive losing exits.",
+            )
+
     run_args: list[str] = []
     if smoke_test:
         run_args.append("--smoke-test")
@@ -635,6 +679,11 @@ with left:
             run_args.extend(["--max-price", str(float(max_price))])
         if int(min_avg_volume) > 0:
             run_args.extend(["--min-average-volume", str(int(min_avg_volume))])
+        if apply_one_shot_breakers:
+            run_args.extend(["--risk-max-open-positions", str(int(one_shot_risk_max_open_positions))])
+            run_args.extend(["--risk-symbol-cooldown-minutes", str(float(one_shot_risk_symbol_cooldown_minutes))])
+            run_args.extend(["--risk-max-daily-drawdown-pct", str(float(one_shot_risk_max_daily_drawdown_pct))])
+            run_args.extend(["--risk-max-consecutive-losses", str(int(one_shot_risk_max_consecutive_losses))])
         if symbol_input.strip():
             run_args.extend(["--symbols", symbol_input.strip()])
             if append_symbols:
