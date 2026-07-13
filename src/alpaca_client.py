@@ -224,6 +224,7 @@ def submit_order(order_params: Dict[str, Any]) -> Dict[str, Any]:
         order_params: Order details with keys:
             - symbol: Stock symbol
             - qty: Quantity (shares)
+            - notional: Dollar amount for market order (fractional-capable assets)
             - side: 'buy' or 'sell'
             - type: 'market' or 'limit' (default 'market')
             - limit_price: Required if type='limit'
@@ -235,14 +236,20 @@ def submit_order(order_params: Dict[str, Any]) -> Dict[str, Any]:
     try:
         symbol = order_params.get("symbol")
         qty = order_params.get("qty")
+        notional = order_params.get("notional")
         side = order_params.get("side", "buy").lower()
         order_type = order_params.get("type", "market").lower()
         limit_price = order_params.get("limit_price")
         tif = order_params.get("time_in_force", "day").lower()
         
         # Validate inputs
-        if not symbol or not qty:
-            raise ValueError("symbol and qty are required")
+        if not symbol:
+            raise ValueError("symbol is required")
+
+        has_qty = qty is not None
+        has_notional = notional is not None
+        if has_qty == has_notional:
+            raise ValueError("Exactly one of qty or notional is required")
         
         if side not in ["buy", "sell"]:
             raise ValueError("side must be 'buy' or 'sell'")
@@ -253,18 +260,24 @@ def submit_order(order_params: Dict[str, Any]) -> Dict[str, Any]:
         
         # Create and submit order
         if order_type == "market":
-            order_request = MarketOrderRequest(
-                symbol=symbol,
-                qty=int(qty),
-                side=side_enum,
-                time_in_force=tif_enum,
-            )
+            market_kwargs: Dict[str, Any] = {
+                "symbol": symbol,
+                "side": side_enum,
+                "time_in_force": tif_enum,
+            }
+            if has_qty:
+                market_kwargs["qty"] = float(qty)
+            else:
+                market_kwargs["notional"] = float(notional)
+            order_request = MarketOrderRequest(**market_kwargs)
         elif order_type == "limit":
             if not limit_price:
                 raise ValueError("limit_price required for limit orders")
+            if not has_qty:
+                raise ValueError("limit orders require qty; notional is only supported for market orders")
             order_request = LimitOrderRequest(
                 symbol=symbol,
-                qty=int(qty),
+                qty=float(qty),
                 side=side_enum,
                 limit_price=float(limit_price),
                 time_in_force=tif_enum,
@@ -273,15 +286,30 @@ def submit_order(order_params: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError("type must be 'market' or 'limit'")
         
         order = trading_client.submit_order(order_request)
+
+        normalized_qty = None
+        if getattr(order, "qty", None) is not None:
+            try:
+                normalized_qty = float(order.qty)
+            except Exception:
+                normalized_qty = None
+
+        normalized_filled_qty = 0.0
+        if getattr(order, "filled_qty", None) is not None:
+            try:
+                normalized_filled_qty = float(order.filled_qty)
+            except Exception:
+                normalized_filled_qty = 0.0
         
         return {
             "id": order.id,
             "symbol": order.symbol,
-            "qty": int(order.qty),
+            "qty": normalized_qty,
             "side": order.side.value,
             "status": order.status.value,
-            "filled_qty": int(order.filled_qty) if order.filled_qty else 0,
+            "filled_qty": normalized_filled_qty,
             "filled_avg_price": float(order.filled_avg_price) if order.filled_avg_price else None,
+            "notional": float(order.notional) if getattr(order, "notional", None) else None,
             "created_at": order.created_at,
             "type": order.order_type.value if order.order_type else None,
         }

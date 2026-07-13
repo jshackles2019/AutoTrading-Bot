@@ -490,14 +490,24 @@ with left:
     st.caption("Place one-off buy/sell orders from the dashboard.")
     with st.form("manual-order-form"):
         manual_symbol = st.text_input("Symbol", value="AAPL").strip().upper()
-        col_side, col_type = st.columns(2)
+        col_side, col_type, col_size_mode = st.columns(3)
         with col_side:
             manual_side = st.selectbox("Side", options=["buy", "sell"])
         with col_type:
             manual_type = st.selectbox("Order type", options=["market", "limit"])
-        manual_qty = st.number_input("Quantity", min_value=1, max_value=1000000, value=1, step=1)
+        with col_size_mode:
+            manual_size_mode = st.selectbox("Order size", options=["shares", "dollars"])
+
+        manual_qty = None
+        manual_notional = None
+        if manual_size_mode == "shares":
+            manual_qty = st.number_input("Quantity", min_value=1, max_value=1000000, value=1, step=1)
+        else:
+            st.caption("Dollar sizing uses Alpaca notional market orders for fractional-capable assets.")
+            manual_notional = st.number_input("Dollar amount", min_value=1.0, max_value=10000000.0, value=100.0, step=1.0)
+
         manual_limit_price = None
-        if manual_type == "limit":
+        if manual_type == "limit" and manual_size_mode == "shares":
             manual_limit_price = st.number_input("Limit price", min_value=0.01, value=1.0, step=0.01)
 
         live_order_confirmed = True
@@ -513,17 +523,25 @@ with left:
             st.error("Live manual order blocked. Confirm the live-order checkbox first.")
         elif not manual_symbol:
             st.error("Symbol is required.")
+        elif manual_size_mode == "dollars" and manual_side != "buy":
+            st.error("Dollar-based notional sizing is enabled for buy orders only in this UI.")
+        elif manual_size_mode == "dollars" and manual_type != "market":
+            st.error("Dollar-based notional sizing requires market order type.")
         else:
             try:
                 alpaca_client = _get_alpaca_client(account_mode)
                 order_payload = {
                     "symbol": manual_symbol,
-                    "qty": int(manual_qty),
                     "side": manual_side,
                     "type": manual_type,
                     "time_in_force": "day",
                 }
-                if manual_type == "limit":
+                if manual_size_mode == "shares":
+                    order_payload["qty"] = int(manual_qty)
+                else:
+                    order_payload["notional"] = float(manual_notional)
+
+                if manual_type == "limit" and manual_size_mode == "shares":
                     order_payload["limit_price"] = float(manual_limit_price)
                 order_result = alpaca_client.submit_order(order_payload)
                 st.success("Order submitted.")
