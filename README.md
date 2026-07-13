@@ -202,8 +202,14 @@ Open:
 4. Start the UI from repo root:
 
 ```powershell
-cd /home/runner/work/AutoTrading-Bot/AutoTrading-Bot
-./scripts/run_ui.ps1 -Port 8501
+cd C:\path\to\AutoTrading-Bot
+python -m streamlit run ui/app.py --server.address 0.0.0.0 --server.port 8501
+```
+
+If PowerShell blocks `run_ui.ps1`, use the direct `python -m streamlit ...` command above, or run this once in the current PowerShell window before calling the script:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass -Force
 ```
 
 5. Allow inbound TCP `8501` on Windows Firewall (host):
