@@ -27,6 +27,7 @@ BG_STATE_FILE = DATA_UI / "background_runner.json"
 BG_OUTPUT_FILE = DATA_LOGS / "background_runner.log"
 SCANNER_SNAPSHOT_FILE = DATA_UI / "scanner_snapshot.json"
 STOP_SCANS_FLAG_FILE = DATA_UI / "stop_scans.flag"
+AUTO_TRADER_PRESETS_FILE = DATA_UI / "auto_trader_presets.json"
 SRC_MAIN = ROOT / "src" / "main.py"
 REPO_PROCESS_HELPER = ROOT / "scripts" / "repo_processes.ps1"
 
@@ -319,6 +320,64 @@ def _build_auto_trader_args(
     return args
 
 
+def _default_auto_trader_presets() -> dict[str, dict[str, float | int | str]]:
+    """Provide built-in guarded presets for auto-trader settings."""
+    return {
+        "conservative": {
+            "max_symbols": 300,
+            "scan_selection": "rotating",
+            "top_candidates": 15,
+            "min_average_volume": 250000,
+            "risk_max_trades_per_day": 1,
+            "risk_max_risk_pct": 0.003,
+            "risk_max_open_risk_pct": 0.008,
+            "risk_max_position_pct": 0.02,
+        },
+        "balanced": {
+            "max_symbols": 500,
+            "scan_selection": "rotating",
+            "top_candidates": 25,
+            "min_average_volume": 100000,
+            "risk_max_trades_per_day": 2,
+            "risk_max_risk_pct": 0.005,
+            "risk_max_open_risk_pct": 0.01,
+            "risk_max_position_pct": 0.03,
+        },
+        "aggressive": {
+            "max_symbols": 900,
+            "scan_selection": "rotating",
+            "top_candidates": 40,
+            "min_average_volume": 50000,
+            "risk_max_trades_per_day": 4,
+            "risk_max_risk_pct": 0.008,
+            "risk_max_open_risk_pct": 0.02,
+            "risk_max_position_pct": 0.05,
+        },
+    }
+
+
+def _load_auto_trader_presets() -> dict[str, dict[str, float | int | str]]:
+    """Load preset file and merge with built-in defaults."""
+    presets = _default_auto_trader_presets()
+    if not AUTO_TRADER_PRESETS_FILE.exists():
+        return presets
+    try:
+        loaded = json.loads(AUTO_TRADER_PRESETS_FILE.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            for name, values in loaded.items():
+                if isinstance(name, str) and isinstance(values, dict):
+                    presets[name] = values
+    except Exception:
+        return presets
+    return presets
+
+
+def _save_auto_trader_presets(presets: dict[str, dict[str, float | int | str]]) -> None:
+    """Persist preset dictionary to disk."""
+    DATA_UI.mkdir(parents=True, exist_ok=True)
+    AUTO_TRADER_PRESETS_FILE.write_text(json.dumps(presets, indent=2), encoding="utf-8")
+
+
 st.title("Breakout Trading Bot")
 st.caption("Control dry-runs, run smoke tests, and inspect logs/trades in one place.")
 
@@ -554,6 +613,35 @@ with left:
     with auto_col2:
         start_auto_bg_clicked = st.button("Start Auto Trader (Guarded)", use_container_width=True)
 
+    presets = _load_auto_trader_presets()
+    preset_names = sorted(presets.keys())
+    if "auto_preset_selected" not in st.session_state or st.session_state["auto_preset_selected"] not in preset_names:
+        st.session_state["auto_preset_selected"] = "balanced" if "balanced" in preset_names else preset_names[0]
+
+    preset_col1, preset_col2 = st.columns([1.3, 1.0])
+    with preset_col1:
+        selected_preset_name = st.selectbox(
+            "Auto preset",
+            options=preset_names,
+            key="auto_preset_selected",
+            help="Load or overwrite guardrail settings using named presets.",
+        )
+    with preset_col2:
+        load_preset_clicked = st.button("Load Preset", use_container_width=True)
+
+    save_col1, save_col2, save_col3 = st.columns([1.2, 1.0, 1.0])
+    with save_col1:
+        preset_name_input = st.text_input(
+            "Preset name",
+            value=selected_preset_name,
+            key="auto_preset_name_input",
+            help="Name used when saving current guardrails as a preset.",
+        )
+    with save_col2:
+        save_preset_clicked = st.button("Save Preset", use_container_width=True)
+    with save_col3:
+        delete_preset_clicked = st.button("Delete Preset", use_container_width=True)
+
     with st.expander("Auto trader guardrails", expanded=False):
         ag1, ag2 = st.columns(2)
         with ag1:
@@ -563,12 +651,14 @@ with left:
                 max_value=5000,
                 value=500,
                 step=25,
+                key="auto_max_symbols",
                 help="How many symbols are scanned per loop in guarded auto mode.",
             )
             auto_scan_selection = st.selectbox(
                 "Auto scan selection",
                 options=["rotating", "random", "first"],
                 index=0,
+                key="auto_scan_selection",
                 help="How symbols are chosen when max symbols caps the US universe.",
             )
             auto_top_candidates = st.number_input(
@@ -577,6 +667,7 @@ with left:
                 max_value=500,
                 value=25,
                 step=1,
+                key="auto_top_candidates",
                 help="Number of ranked symbols evaluated for potential entries each loop.",
             )
             auto_min_avg_volume = st.number_input(
@@ -585,6 +676,7 @@ with left:
                 max_value=100000000,
                 value=100000,
                 step=10000,
+                key="auto_min_avg_volume",
                 help="Liquidity floor for guarded auto mode.",
             )
         with ag2:
@@ -594,6 +686,7 @@ with left:
                 max_value=50,
                 value=2,
                 step=1,
+                key="auto_risk_max_trades_per_day",
                 help="Maximum trades allowed per day in guarded auto mode.",
             )
             auto_risk_max_risk_pct = st.number_input(
@@ -603,6 +696,7 @@ with left:
                 value=0.005,
                 step=0.001,
                 format="%.3f",
+                key="auto_risk_max_risk_pct",
                 help="Fraction of equity risked per trade.",
             )
             auto_risk_max_open_risk_pct = st.number_input(
@@ -612,6 +706,7 @@ with left:
                 value=0.01,
                 step=0.001,
                 format="%.3f",
+                key="auto_risk_max_open_risk_pct",
                 help="Maximum total open risk as a fraction of equity.",
             )
             auto_risk_max_position_pct = st.number_input(
@@ -621,8 +716,59 @@ with left:
                 value=0.03,
                 step=0.005,
                 format="%.3f",
+                key="auto_risk_max_position_pct",
                 help="Maximum position notional as a fraction of equity.",
             )
+
+    if load_preset_clicked:
+        preset = presets.get(selected_preset_name)
+        if not preset:
+            st.error("Selected preset was not found.")
+        else:
+            st.session_state["auto_max_symbols"] = int(preset.get("max_symbols", 500))
+            st.session_state["auto_scan_selection"] = str(preset.get("scan_selection", "rotating"))
+            st.session_state["auto_top_candidates"] = int(preset.get("top_candidates", 25))
+            st.session_state["auto_min_avg_volume"] = int(preset.get("min_average_volume", 100000))
+            st.session_state["auto_risk_max_trades_per_day"] = int(preset.get("risk_max_trades_per_day", 2))
+            st.session_state["auto_risk_max_risk_pct"] = float(preset.get("risk_max_risk_pct", 0.005))
+            st.session_state["auto_risk_max_open_risk_pct"] = float(preset.get("risk_max_open_risk_pct", 0.01))
+            st.session_state["auto_risk_max_position_pct"] = float(preset.get("risk_max_position_pct", 0.03))
+            st.success(f"Loaded preset: {selected_preset_name}")
+            st.rerun()
+
+    if save_preset_clicked:
+        name = (preset_name_input or "").strip().lower()
+        if not name:
+            st.error("Preset name is required.")
+        else:
+            presets[name] = {
+                "max_symbols": int(auto_max_symbols),
+                "scan_selection": str(auto_scan_selection),
+                "top_candidates": int(auto_top_candidates),
+                "min_average_volume": int(auto_min_avg_volume),
+                "risk_max_trades_per_day": int(auto_risk_max_trades_per_day),
+                "risk_max_risk_pct": float(auto_risk_max_risk_pct),
+                "risk_max_open_risk_pct": float(auto_risk_max_open_risk_pct),
+                "risk_max_position_pct": float(auto_risk_max_position_pct),
+            }
+            _save_auto_trader_presets(presets)
+            st.session_state["auto_preset_selected"] = name
+            st.success(f"Saved preset: {name}")
+            st.rerun()
+
+    if delete_preset_clicked:
+        name = selected_preset_name
+        if name in {"conservative", "balanced", "aggressive"}:
+            st.error("Built-in presets cannot be deleted.")
+        elif name not in presets:
+            st.error("Preset not found.")
+        else:
+            del presets[name]
+            _save_auto_trader_presets(presets)
+            remaining_names = sorted(presets.keys())
+            st.session_state["auto_preset_selected"] = "balanced" if "balanced" in remaining_names else remaining_names[0]
+            st.success(f"Deleted preset: {name}")
+            st.rerun()
 
     auto_live_confirm_token = ""
     if live_guard_required and not auto_trader_dry_run:
