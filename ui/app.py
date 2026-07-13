@@ -6,6 +6,7 @@ plus visibility into logs and trades written by the existing bot logger.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import subprocess
@@ -197,10 +198,33 @@ def _default_account_mode() -> str:
     return "paper" if is_paper else "live"
 
 
-def _account_snapshot() -> tuple[Optional[dict], Optional[str]]:
+def _get_alpaca_client(account_mode: str):
+    expected_paper = account_mode == "paper"
+    os.environ["ALPACA_PAPER"] = "True" if expected_paper else "False"
     try:
         from src import alpaca_client
+    except ImportError:
+        import alpaca_client
 
+    if getattr(alpaca_client, "ALPACA_PAPER", None) != expected_paper:
+        alpaca_client = importlib.reload(alpaca_client)
+    return alpaca_client
+
+
+@st.cache_data(ttl=900)
+def _search_symbols_cached(account_mode: str, query: str, limit: int = 60) -> list[str]:
+    alpaca_client = _get_alpaca_client(account_mode)
+    symbols = alpaca_client.get_tradeable_us_symbols(max_symbols=None)
+    q = (query or "").strip().upper()
+    if not q:
+        return symbols[:limit]
+    matched = [s for s in symbols if q in s]
+    return matched[:limit]
+
+
+def _account_snapshot(account_mode: str) -> tuple[Optional[dict], Optional[str]]:
+    try:
+        alpaca_client = _get_alpaca_client(account_mode)
         account = alpaca_client.get_account()
         return account, None
     except Exception as exc:
@@ -246,7 +270,18 @@ with left:
         options=["config", "us-all"],
         help="Use configured symbols or all active tradeable US equities.",
     )
-    max_symbols = st.number_input("Max symbols (for us-all)", min_value=1, max_value=10000, value=200, step=1)
+    max_symbols = st.number_input(
+        "Max symbols to scan per loop (0 = unlimited)",
+        min_value=0,
+        max_value=10000,
+        value=200,
+        step=1,
+    )
+    scan_selection = st.selectbox(
+        "Capped-scan symbol selection",
+        options=["rotating", "random", "first"],
+        help="When max symbols is capped, rotate through the universe, pick random symbols, or always use the first slice.",
+    )
     top_candidates = st.number_input("Top ranked candidates", min_value=1, max_value=1000, value=20, step=1)
     min_price = st.number_input("Min price filter", min_value=0.0, value=0.0, step=1.0)
     max_price = st.number_input("Max price filter (0 to disable)", min_value=0.0, value=0.0, step=1.0)
@@ -293,6 +328,7 @@ with left:
         run_args.extend(["--volume-ratio-cap", str(float(volume_ratio_cap))])
         if symbol_universe != "config":
             run_args.extend(["--symbol-universe", symbol_universe, "--max-symbols", str(int(max_symbols))])
+            run_args.extend(["--scan-selection", scan_selection])
         if min_price > 0:
             run_args.extend(["--min-price", str(float(min_price))])
         if max_price > 0:
@@ -378,11 +414,103 @@ with left:
     st.write(f"Root: `{ROOT}`")
     st.write(f"Alpaca keys present: {'Yes' if _account_keys_present() else 'No'}")
 
+    st.divider()
+    st.subheader("Manual Order Ticket")
+    st.caption("Place one-off buy/sell orders from the dashboard.")
+    with st.form("manual-order-form"):
+        manual_symbol = st.text_input("Symbol", value="AAPL").strip().upper()
+        col_side, col_type = st.columns(2)
+        with col_side:
+            manual_side = st.selectbox("Side", options=["buy", "sell"])
+        with col_type:
+            manual_type = st.selectbox("Order type", options=["market", "limit"])
+        manual_qty = st.number_input("Quantity", min_value=1, max_value=1000000, value=1, step=1)
+        manual_limit_price = None
+        if manual_type == "limit":
+            manual_limit_price = st.number_input("Limit price", min_value=0.01, value=1.0, step=0.01)
+
+        live_order_confirmed = True
+        if account_mode == "live":
+            live_order_confirmed = st.checkbox("I understand this will place a live order.", value=False)
+
+        manual_submit = st.form_submit_button("Submit Manual Order", use_container_width=True)
+
+    if manual_submit:
+        if not _account_keys_present():
+            st.error("Missing Alpaca API keys in environment.")
+        elif account_mode == "live" and not live_order_confirmed:
+            st.error("Live manual order blocked. Confirm the live-order checkbox first.")
+        elif not manual_symbol:
+            st.error("Symbol is required.")
+        else:
+            try:
+                alpaca_client = _get_alpaca_client(account_mode)
+                order_payload = {
+                    "symbol": manual_symbol,
+                    "qty": int(manual_qty),
+                    "side": manual_side,
+                    "type": manual_type,
+                    "time_in_force": "day",
+                }
+                if manual_type == "limit":
+                    order_payload["limit_price"] = float(manual_limit_price)
+                order_result = alpaca_client.submit_order(order_payload)
+                st.success("Order submitted.")
+                st.json(order_result)
+            except Exception as exc:
+                st.error(f"Manual order failed: {exc}")
+
+    st.divider()
+    st.subheader("Stock Search And Overview")
+    search_query = st.text_input("Search ticker", placeholder="TSLA")
+    symbol_options: list[str] = []
+    try:
+        symbol_options = _search_symbols_cached(account_mode, search_query)
+    except Exception as exc:
+        st.warning(f"Symbol search unavailable: {exc}")
+
+    selected_symbol = None
+    if symbol_options:
+        selected_symbol = st.selectbox("Matching symbols", options=symbol_options)
+    elif search_query.strip():
+        st.info("No symbols matched your search.")
+
+    if selected_symbol:
+        try:
+            alpaca_client = _get_alpaca_client(account_mode)
+            overview = alpaca_client.get_symbol_overview(selected_symbol, lookback=60)
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Last Close", f"${(overview.get('last_close') or 0):,.2f}")
+            c2.metric("Day Change", f"${(overview.get('day_change') or 0):,.2f}")
+            c3.metric("Day Change %", f"{(overview.get('day_change_pct') or 0):.2f}%")
+
+            st.caption(
+                f"{overview.get('name') or selected_symbol} | "
+                f"Exchange: {overview.get('exchange') or 'N/A'} | "
+                f"Status: {overview.get('status') or 'N/A'}"
+            )
+            st.write(
+                f"Tradable: {overview.get('tradable')} | Shortable: {overview.get('shortable')} | "
+                f"Marginable: {overview.get('marginable')} | Fractionable: {overview.get('fractionable')}"
+            )
+            if overview.get("avg_volume_20") is not None:
+                st.write(f"20-day average volume: {overview.get('avg_volume_20'):,.0f}")
+
+            bars = overview.get("bars", [])
+            if bars:
+                bars_df = pd.DataFrame(bars)
+                bars_df["timestamp"] = pd.to_datetime(bars_df["timestamp"])
+                st.line_chart(bars_df.set_index("timestamp")["close"], height=220)
+                st.dataframe(bars_df.tail(20), use_container_width=True)
+        except Exception as exc:
+            st.error(f"Failed to load overview for {selected_symbol}: {exc}")
+
 with right:
     @st.fragment(run_every=refresh_every)
     def _live_panels() -> None:
         st.subheader("Account Snapshot")
-        account, account_err = _account_snapshot()
+        account, account_err = _account_snapshot(account_mode)
         card1, card2, card3 = st.columns(3)
         if account:
             card1.metric("Equity", f"${account.get('equity', 0):,.2f}")

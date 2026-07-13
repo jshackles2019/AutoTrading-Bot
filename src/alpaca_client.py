@@ -161,6 +161,62 @@ def get_bars(symbol: str, timeframe: str, lookback: int = 50) -> List[Dict[str, 
         raise RuntimeError(f"Failed to fetch bars for {symbol}: {e}")
 
 
+def get_symbol_overview(symbol: str, lookback: int = 30) -> Dict[str, Any]:
+    """Get a compact symbol overview for dashboard/search views.
+
+    Args:
+        symbol: Stock symbol to inspect.
+        lookback: Number of daily bars used for summary stats.
+
+    Returns:
+        Dict containing asset metadata and recent price/volume summary.
+    """
+    try:
+        normalized = symbol.strip().upper()
+        if not normalized:
+            raise ValueError("symbol is required")
+
+        asset = trading_client.get_asset(normalized)
+        bars = get_bars(normalized, "1Day", lookback=max(2, int(lookback)))
+
+        last_close = None
+        prev_close = None
+        day_change = None
+        day_change_pct = None
+        avg_volume_20 = None
+
+        if bars:
+            last_close = float(bars[-1]["close"])
+            if len(bars) >= 2:
+                prev_close = float(bars[-2]["close"])
+            if prev_close and prev_close != 0:
+                day_change = last_close - prev_close
+                day_change_pct = (day_change / prev_close) * 100.0
+
+            recent_volumes = [float(b["volume"]) for b in bars[-20:]]
+            if recent_volumes:
+                avg_volume_20 = sum(recent_volumes) / len(recent_volumes)
+
+        return {
+            "symbol": normalized,
+            "name": getattr(asset, "name", None),
+            "exchange": getattr(asset, "exchange", None),
+            "tradable": bool(getattr(asset, "tradable", False)),
+            "shortable": bool(getattr(asset, "shortable", False)),
+            "marginable": bool(getattr(asset, "marginable", False)),
+            "fractionable": bool(getattr(asset, "fractionable", False)),
+            "status": str(getattr(asset, "status", "UNKNOWN")),
+            "last_close": last_close,
+            "previous_close": prev_close,
+            "day_change": day_change,
+            "day_change_pct": day_change_pct,
+            "avg_volume_20": avg_volume_20,
+            "bars": bars,
+        }
+    except Exception as e:
+        raise RuntimeError(f"Failed to get symbol overview for {symbol}: {e}")
+
+
 def submit_order(order_params: Dict[str, Any]) -> Dict[str, Any]:
     """Submit a market or limit order to Alpaca.
     
