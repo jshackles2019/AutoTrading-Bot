@@ -44,6 +44,156 @@ st.set_page_config(
     layout="wide",
 )
 
+UI_THEMES = {
+    "Midnight Ledger": {
+        "surface": "#101827",
+        "surface_alt": "#192235",
+        "text": "#e5ecff",
+        "muted": "#9fb0d3",
+        "accent": "#2fc6a5",
+        "warning": "#f5b53f",
+        "danger": "#f46b76",
+        "border": "#2a3550",
+        "gradient": "radial-gradient(1200px 480px at 10% -10%, rgba(47,198,165,0.12), transparent 50%), radial-gradient(1200px 500px at 92% -15%, rgba(102,146,255,0.18), transparent 52%), #0c1321",
+    },
+    "Paper Signal": {
+        "surface": "#ffffff",
+        "surface_alt": "#f4f7fb",
+        "text": "#1b2538",
+        "muted": "#5a6883",
+        "accent": "#0f766e",
+        "warning": "#a16207",
+        "danger": "#be123c",
+        "border": "#d3dceb",
+        "gradient": "radial-gradient(1200px 420px at 4% -12%, rgba(15,118,110,0.09), transparent 52%), radial-gradient(1200px 420px at 96% -18%, rgba(14,116,144,0.1), transparent 52%), #f0f4fa",
+    },
+    "Amber Terminal": {
+        "surface": "#1a1310",
+        "surface_alt": "#251b17",
+        "text": "#ffe9d4",
+        "muted": "#d4b99d",
+        "accent": "#f58f4c",
+        "warning": "#f7c451",
+        "danger": "#ff7b7b",
+        "border": "#423028",
+        "gradient": "radial-gradient(1400px 520px at 15% -20%, rgba(245,143,76,0.19), transparent 52%), radial-gradient(1200px 500px at 86% -18%, rgba(255,173,92,0.12), transparent 52%), #140f0d",
+    },
+    "Forest Tape": {
+        "surface": "#0f1a15",
+        "surface_alt": "#16251f",
+        "text": "#e4f7ef",
+        "muted": "#9fbeaf",
+        "accent": "#31c48d",
+        "warning": "#f6c453",
+        "danger": "#ff8d8d",
+        "border": "#29463b",
+        "gradient": "radial-gradient(1300px 520px at 10% -14%, rgba(49,196,141,0.18), transparent 52%), radial-gradient(1200px 480px at 90% -18%, rgba(65,151,255,0.1), transparent 52%), #0b1410",
+    },
+}
+
+
+def _apply_ui_theme(theme_name: str) -> None:
+    """Apply a selectable visual theme to the dashboard."""
+    theme = UI_THEMES.get(theme_name, UI_THEMES["Midnight Ledger"])
+    css = f"""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap');
+
+    .stApp {{
+        background: {theme['gradient']};
+        color: {theme['text']};
+        font-family: 'IBM Plex Sans', sans-serif;
+    }}
+
+    h1, h2, h3, h4, h5, h6 {{
+        font-family: 'Space Grotesk', sans-serif;
+        letter-spacing: 0.01em;
+    }}
+
+    .stApp .stMetric,
+    .stApp div[data-testid="stTextArea"] textarea,
+    .stApp div[data-testid="stCodeBlock"] {{
+        background: {theme['surface']};
+        border: 1px solid {theme['border']};
+        border-radius: 14px;
+    }}
+
+    .stApp div[data-testid="stAlert"] {{
+        border-radius: 12px;
+        border: 1px solid {theme['border']};
+    }}
+
+    .stApp div[data-testid="stExpander"] details,
+    .stApp div[data-testid="stVerticalBlockBorderWrapper"] {{
+        background: {theme['surface']};
+        border: 1px solid {theme['border']};
+        border-radius: 14px;
+    }}
+
+    .stApp p,
+    .stApp span,
+    .stApp label,
+    .stApp div[data-testid="stMarkdownContainer"] {{
+        color: {theme['text']};
+    }}
+
+    .stApp .stCaption {{
+        color: {theme['muted']};
+    }}
+
+    .stApp .stButton > button {{
+        border-radius: 10px;
+        border: 1px solid {theme['border']};
+        background: {theme['surface_alt']};
+        color: {theme['text']};
+        font-weight: 600;
+    }}
+
+    .stApp .stButton > button[kind="primary"] {{
+        background: {theme['accent']};
+        color: #0a141f;
+        border-color: transparent;
+    }}
+
+    .status-pill {{
+        display: inline-block;
+        padding: 0.18rem 0.65rem;
+        margin: 0.15rem 0.35rem 0.15rem 0;
+        border-radius: 999px;
+        border: 1px solid {theme['border']};
+        font-size: 0.82rem;
+        font-weight: 600;
+        background: {theme['surface_alt']};
+        color: {theme['text']};
+    }}
+
+    .status-pill.success {{
+        border-color: {theme['accent']};
+        color: {theme['accent']};
+    }}
+
+    .status-pill.warning {{
+        border-color: {theme['warning']};
+        color: {theme['warning']};
+    }}
+
+    .status-pill.danger {{
+        border-color: {theme['danger']};
+        color: {theme['danger']};
+    }}
+
+    .status-pill.neutral {{
+        color: {theme['muted']};
+    }}
+    </style>
+    """
+    st.markdown(css, unsafe_allow_html=True)
+
+
+def _status_pill(label: str, tone: str = "neutral") -> None:
+    safe_tone = tone if tone in {"success", "warning", "danger", "neutral"} else "neutral"
+    st.markdown(f"<span class='status-pill {safe_tone}'>{label}</span>", unsafe_allow_html=True)
+
 
 def _latest_file(folder: Path, pattern: str) -> Optional[Path]:
     files = sorted(folder.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -430,8 +580,22 @@ def _save_auto_trader_presets(presets: dict[str, dict[str, float | int | str]]) 
     AUTO_TRADER_PRESETS_FILE.write_text(json.dumps(presets, indent=2), encoding="utf-8")
 
 
-st.title("Breakout Trading Bot")
-st.caption("Control dry-runs, run smoke tests, and inspect logs/trades in one place.")
+if "ui_theme_name" not in st.session_state:
+    st.session_state["ui_theme_name"] = "Midnight Ledger"
+
+header_left, header_right = st.columns([1.45, 1.0])
+with header_left:
+    st.title(":material/query_stats: Breakout trading console")
+    st.caption("Operate dry-runs, guarded automation, and safety controls from one cockpit.")
+with header_right:
+    selected_theme = st.selectbox(
+        "Visual theme",
+        options=list(UI_THEMES.keys()),
+        key="ui_theme_name",
+        help="Choose the dashboard style that fits your environment and readability preference.",
+    )
+
+_apply_ui_theme(st.session_state.get("ui_theme_name", "Midnight Ledger"))
 
 refresh_col1, refresh_col2 = st.columns([1.2, 1.0])
 with refresh_col1:
@@ -700,9 +864,9 @@ with left:
 
     run_col, smoke_col = st.columns(2)
     with run_col:
-        run_clicked = st.button("Run One-Shot", type="primary", use_container_width=True)
+        run_clicked = st.button("Run One-Shot", type="primary", width="stretch")
     with smoke_col:
-        smoke_clicked = st.button("Run Smoke Test", use_container_width=True)
+        smoke_clicked = st.button("Run Smoke Test", width="stretch")
 
     st.caption("Auto trader quick start")
     auto_col1, auto_col2 = st.columns(2)
@@ -713,7 +877,7 @@ with left:
             help="Run continuous guarded scanning without placing live orders.",
         )
     with auto_col2:
-        start_auto_bg_clicked = st.button("Start Auto Trader (Guarded)", use_container_width=True)
+        start_auto_bg_clicked = st.button("Start Auto Trader (Guarded)", width="stretch")
 
     presets = _load_auto_trader_presets()
     preset_names = sorted(presets.keys())
@@ -729,7 +893,7 @@ with left:
             help="Load or overwrite guardrail settings using named presets.",
         )
     with preset_col2:
-        load_preset_clicked = st.button("Load Preset", use_container_width=True)
+        load_preset_clicked = st.button("Load Preset", width="stretch")
 
     save_col1, save_col2, save_col3 = st.columns([1.2, 1.0, 1.0])
     with save_col1:
@@ -740,9 +904,9 @@ with left:
             help="Name used when saving current guardrails as a preset.",
         )
     with save_col2:
-        save_preset_clicked = st.button("Save Preset", use_container_width=True)
+        save_preset_clicked = st.button("Save Preset", width="stretch")
     with save_col3:
-        delete_preset_clicked = st.button("Delete Preset", use_container_width=True)
+        delete_preset_clicked = st.button("Delete Preset", width="stretch")
 
     with st.expander("Auto trader guardrails", expanded=False):
         ag1, ag2 = st.columns(2)
@@ -993,59 +1157,79 @@ with left:
 
     watchdog_state = _load_watchdog_state()
     if watchdog_state:
-        st.caption("Watchdog Supervisor")
-        st.write(f"Watchdog status: **{watchdog_state.get('status', 'unknown')}**")
-        st.write(f"Watchdog restarts: `{watchdog_state.get('restart_count', 0)}`")
-        if watchdog_state.get("last_exit_code") is not None:
-            st.write(f"Watchdog last exit code: `{watchdog_state.get('last_exit_code')}`")
-        if watchdog_state.get("next_restart_at"):
-            st.write(f"Watchdog next restart: `{watchdog_state.get('next_restart_at')}`")
-        if watchdog_state.get("message"):
-            st.write(f"Watchdog note: {watchdog_state.get('message')}")
-        if WATCHDOG_LOG_FILE.exists():
-            st.text_area(
-                "watchdog-log",
-                _read_last_lines(WATCHDOG_LOG_FILE, max_lines=60, newest_first=True),
-                height=130,
-            )
+        with st.container(border=True):
+            st.markdown("##### :material/monitor_heart: Watchdog supervisor")
+            watchdog_status = str(watchdog_state.get("status", "unknown")).lower()
+            if "halted" in watchdog_status or "blocked" in watchdog_status:
+                _status_pill(f"Watchdog: {watchdog_status}", "danger")
+            elif "restart" in watchdog_status:
+                _status_pill(f"Watchdog: {watchdog_status}", "warning")
+            else:
+                _status_pill(f"Watchdog: {watchdog_status}", "success")
+            _status_pill(f"Restarts: {watchdog_state.get('restart_count', 0)}", "neutral")
+
+            if watchdog_state.get("last_exit_code") is not None:
+                st.write(f"Last exit code: `{watchdog_state.get('last_exit_code')}`")
+            if watchdog_state.get("next_restart_at"):
+                st.write(f"Next restart: `{watchdog_state.get('next_restart_at')}`")
+            if watchdog_state.get("message"):
+                st.caption(watchdog_state.get("message"))
+
+            if WATCHDOG_LOG_FILE.exists():
+                with st.expander("Watchdog log tail", expanded=False):
+                    st.text_area(
+                        "watchdog-log",
+                        _read_last_lines(WATCHDOG_LOG_FILE, max_lines=60, newest_first=True),
+                        height=130,
+                    )
 
     runtime_status = _load_runtime_status()
     if runtime_status:
-        st.caption("Runtime Circuit Breakers")
-        st.write(f"Runtime status: **{runtime_status.get('status', 'unknown')}**")
-        if runtime_status.get("updated_at"):
-            st.write(f"Last update: `{runtime_status.get('updated_at')}`")
-        if runtime_status.get("halt_reason"):
-            st.error(f"Halt reason: {runtime_status.get('halt_reason')}")
-        if runtime_status.get("status") == "blocked_preflight":
-            st.error("Preflight gate blocked startup. Review runtime note and account/runtime state before restart.")
-        if runtime_status.get("message"):
-            st.write(f"Runtime note: {runtime_status.get('message')}")
-        if runtime_status.get("entry_lockout"):
-            st.warning(
-                "Safe-mode entry lockout is active. "
-                f"Reason: {runtime_status.get('entry_lockout_reason', 'Startup reconciliation mismatch')}."
+        with st.container(border=True):
+            st.markdown("##### :material/shield: Runtime safety")
+            runtime_status_text = str(runtime_status.get("status", "unknown")).lower()
+            if runtime_status_text in {"halted", "blocked_preflight", "safe_mode_lockout"}:
+                _status_pill(f"Runtime: {runtime_status_text}", "danger")
+            elif runtime_status_text in {"starting", "stopped", "reset"}:
+                _status_pill(f"Runtime: {runtime_status_text}", "warning")
+            else:
+                _status_pill(f"Runtime: {runtime_status_text}", "success")
+
+            if runtime_status.get("entry_lockout"):
+                _status_pill("Entry lockout active", "warning")
+            if runtime_status.get("updated_at"):
+                st.caption(f"Last update: {runtime_status.get('updated_at')}")
+            if runtime_status.get("halt_reason"):
+                st.error(f"Halt reason: {runtime_status.get('halt_reason')}")
+            if runtime_status.get("status") == "blocked_preflight":
+                st.error("Preflight gate blocked startup. Review runtime note and account/runtime state before restart.")
+            if runtime_status.get("message"):
+                st.write(f"Runtime note: {runtime_status.get('message')}")
+            if runtime_status.get("entry_lockout"):
+                st.warning(
+                    "Safe-mode entry lockout is active. "
+                    f"Reason: {runtime_status.get('entry_lockout_reason', 'Startup reconciliation mismatch')}."
+                )
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Consecutive losses", int(runtime_status.get("consecutive_losses", 0)))
+            c2.metric("Active positions", int(runtime_status.get("active_positions", 0)))
+            c3.metric("Session P/L", f"${float(runtime_status.get('session_pnl', 0.0)):,.2f}")
+
+            breakers = runtime_status.get("circuit_breakers", {}) or {}
+            st.caption(
+                "Configured breakers | "
+                f"drawdown: {breakers.get('max_daily_drawdown_pct', 'N/A')} | "
+                f"consecutive losses: {breakers.get('max_consecutive_losses', 'N/A')} | "
+                f"max open positions: {breakers.get('max_open_positions', 'N/A')} | "
+                f"cooldown min: {breakers.get('symbol_cooldown_minutes', 'N/A')}"
             )
-
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Consecutive Losses", int(runtime_status.get("consecutive_losses", 0)))
-        c2.metric("Active Positions", int(runtime_status.get("active_positions", 0)))
-        c3.metric("Session P/L", f"${float(runtime_status.get('session_pnl', 0.0)):,.2f}")
-
-        breakers = runtime_status.get("circuit_breakers", {}) or {}
-        st.write(
-            "Configured breakers | "
-            f"drawdown: {breakers.get('max_daily_drawdown_pct', 'N/A')} | "
-            f"consecutive losses: {breakers.get('max_consecutive_losses', 'N/A')} | "
-            f"max open positions: {breakers.get('max_open_positions', 'N/A')} | "
-            f"cooldown min: {breakers.get('symbol_cooldown_minutes', 'N/A')}"
-        )
 
         rc_actions_1, rc_actions_2 = st.columns(2)
         with rc_actions_1:
-            acknowledge_halt_clicked = st.button("Acknowledge/Reset Halt", use_container_width=True)
+            acknowledge_halt_clicked = st.button("Acknowledge/Reset Halt", width="stretch")
         with rc_actions_2:
-            clear_cooldowns_clicked = st.button("Reset Halt + Clear Cooldowns", use_container_width=True)
+            clear_cooldowns_clicked = st.button("Reset Halt + Clear Cooldowns", width="stretch")
 
         if acknowledge_halt_clicked or clear_cooldowns_clicked:
             rc, out, err = _reset_runtime_status(
@@ -1067,13 +1251,13 @@ with left:
 
     start_col, stop_col, req_stop_col, clear_stop_col = st.columns(4)
     with start_col:
-        start_bg_clicked = st.button("Start Background", use_container_width=True)
+        start_bg_clicked = st.button("Start Background", width="stretch")
     with stop_col:
-        stop_bg_clicked = st.button("Stop Background", use_container_width=True)
+        stop_bg_clicked = st.button("Stop Background", width="stretch")
     with req_stop_col:
-        request_scan_stop_clicked = st.button("Request Scan Stop", use_container_width=True)
+        request_scan_stop_clicked = st.button("Request Scan Stop", width="stretch")
     with clear_stop_col:
-        clear_scan_stop_clicked = st.button("Clear Stop", use_container_width=True)
+        clear_scan_stop_clicked = st.button("Clear Stop", width="stretch")
 
     if request_scan_stop_clicked:
         _set_scan_stop()
@@ -1092,7 +1276,7 @@ with left:
         value=False,
         help="Truncates all .log files under data/logs.",
     )
-    clear_logs_clicked = st.button("Clear Logs", use_container_width=True)
+    clear_logs_clicked = st.button("Clear Logs", width="stretch")
     if clear_logs_clicked:
         if not clear_logs_confirm:
             st.warning("Enable confirmation before clearing log files.")
@@ -1107,9 +1291,9 @@ with left:
     st.caption("Rogue process tools")
     proc_list_col, proc_kill_col = st.columns(2)
     with proc_list_col:
-        list_rogue_clicked = st.button("List Rogue Processes", use_container_width=True)
+        list_rogue_clicked = st.button("List Rogue Processes", width="stretch")
     with proc_kill_col:
-        kill_rogue_clicked = st.button("Kill Rogue Processes", use_container_width=True)
+        kill_rogue_clicked = st.button("Kill Rogue Processes", width="stretch")
 
     if list_rogue_clicked:
         rc, out, err = _run_repo_process_helper("-List")
@@ -1173,84 +1357,93 @@ with left:
 with right:
     @st.fragment(run_every=refresh_every)
     def _live_panels() -> None:
-        st.subheader("Account Snapshot")
-        account, account_err = _account_snapshot(account_mode)
-        card1, card2, card3 = st.columns(3)
-        if account:
-            card1.metric("Equity", f"${account.get('equity', 0):,.2f}")
-            card2.metric("Buying Power", f"${account.get('buying_power', 0):,.2f}")
-            card3.metric("Status", _format_status(account.get("status", "Unavailable")))
-        else:
-            card1.metric("Equity", "N/A")
-            card2.metric("Buying Power", "N/A")
-            card3.metric("Status", "Unavailable")
-            if account_err:
-                st.warning(f"Account fetch failed: {account_err}")
-
-        st.subheader("Run Output")
-        last_run = st.session_state.get("last_run")
-        if last_run:
-            rc_color = "green" if last_run["rc"] == 0 else "red"
-            st.markdown(
-                f"**Last run:** {last_run['when']}  \\n"
-                f"**Command:** `{last_run['cmd']}`  \\n"
-                f"**Exit code:** :{rc_color}[{last_run['rc']}]"
-            )
-            if last_run["out"]:
-                st.text_area("stdout", last_run["out"], height=220)
-            if last_run["err"]:
-                st.text_area("stderr", last_run["err"], height=160)
-        else:
-            st.info("No run yet. Use the controls to start a run.")
-
-        st.subheader("Recent Log Tail")
-        latest_log = _latest_file(DATA_LOGS, "bot_*.log")
-        if latest_log:
-            st.caption(f"File: `{latest_log.name}`")
-            st.text_area("log", _read_last_lines(latest_log, max_lines=120, newest_first=True), height=260)
-        else:
-            st.info("No bot logs found yet.")
-
-        st.subheader("Background Runner Log")
-        if BG_OUTPUT_FILE.exists():
-            st.caption(f"File: `{BG_OUTPUT_FILE.name}`")
-            st.text_area(
-                "background-log",
-                _read_last_lines(BG_OUTPUT_FILE, max_lines=120, newest_first=True),
-                height=220,
-            )
-        else:
-            st.info("No background runner log found yet.")
-
-        st.subheader("Recent Trades")
-        trades_df = _load_trades_df()
-        if trades_df.empty:
-            st.info("No trade rows found yet.")
-        else:
-            st.dataframe(trades_df.tail(30), use_container_width=True)
-
-        st.subheader("Scanner Snapshot")
-        snapshot = _load_scanner_snapshot()
-        if snapshot:
-            st.caption(f"Updated: {snapshot.get('timestamp', 'N/A')}")
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Scanned", int(snapshot.get("scanned", 0)))
-            m2.metric("Buy Signals", int(snapshot.get("buy_signals", 0)))
-            m3.metric("Selected", int(snapshot.get("selected", 0)))
-            m4.metric("Top Analyzed", int(len(snapshot.get("top_analyzed", []))))
-
-            top_rows = snapshot.get("top", [])
-            if top_rows:
-                st.dataframe(pd.DataFrame(top_rows), use_container_width=True)
+        with st.container(border=True):
+            st.subheader(":material/account_balance: Account snapshot")
+            account, account_err = _account_snapshot(account_mode)
+            card1, card2, card3 = st.columns(3)
+            if account:
+                card1.metric("Equity", f"${account.get('equity', 0):,.2f}")
+                card2.metric("Buying power", f"${account.get('buying_power', 0):,.2f}")
+                card3.metric("Status", _format_status(account.get("status", "Unavailable")))
             else:
-                analyzed_rows = snapshot.get("top_analyzed", [])
-                if analyzed_rows:
-                    st.info("No BUY candidates in latest snapshot. Showing top analyzed symbols.")
-                    st.dataframe(pd.DataFrame(analyzed_rows), use_container_width=True)
+                card1.metric("Equity", "N/A")
+                card2.metric("Buying power", "N/A")
+                card3.metric("Status", "Unavailable")
+                if account_err:
+                    st.warning(f"Account fetch failed: {account_err}")
+
+        run_tab, logs_tab, trades_tab, scanner_tab = st.tabs(
+            [
+                ":material/play_circle: Run output",
+                ":material/article: Logs",
+                ":material/table_chart: Trades",
+                ":material/analytics: Scanner",
+            ]
+        )
+
+        with run_tab:
+            last_run = st.session_state.get("last_run")
+            if last_run:
+                rc_color = "green" if last_run["rc"] == 0 else "red"
+                st.markdown(
+                    f"**Last run:** {last_run['when']}  \\n"
+                    f"**Command:** `{last_run['cmd']}`  \\n"
+                    f"**Exit code:** :{rc_color}[{last_run['rc']}]"
+                )
+                if last_run["out"]:
+                    st.text_area("stdout", last_run["out"], height=220)
+                if last_run["err"]:
+                    st.text_area("stderr", last_run["err"], height=160)
+            else:
+                st.info("No run yet. Use the controls to start a run.")
+
+        with logs_tab:
+            latest_log = _latest_file(DATA_LOGS, "bot_*.log")
+            if latest_log:
+                st.caption(f"File: `{latest_log.name}`")
+                st.text_area("log", _read_last_lines(latest_log, max_lines=120, newest_first=True), height=260)
+            else:
+                st.info("No bot logs found yet.")
+
+            if BG_OUTPUT_FILE.exists():
+                st.caption(f"Background file: `{BG_OUTPUT_FILE.name}`")
+                st.text_area(
+                    "background-log",
+                    _read_last_lines(BG_OUTPUT_FILE, max_lines=120, newest_first=True),
+                    height=220,
+                )
+            else:
+                st.info("No background runner log found yet.")
+
+        with trades_tab:
+            trades_df = _load_trades_df()
+            if trades_df.empty:
+                st.info("No trade rows found yet.")
+            else:
+                st.dataframe(trades_df.tail(30), width="stretch")
+
+        with scanner_tab:
+            snapshot = _load_scanner_snapshot()
+            if snapshot:
+                st.caption(f"Updated: {snapshot.get('timestamp', 'N/A')}")
+                m1, m2, m3, m4 = st.columns(4)
+                m1.metric("Scanned", int(snapshot.get("scanned", 0)))
+                m2.metric("Buy signals", int(snapshot.get("buy_signals", 0)))
+                m3.metric("Selected", int(snapshot.get("selected", 0)))
+                m4.metric("Top analyzed", int(len(snapshot.get("top_analyzed", []))))
+
+                top_rows = snapshot.get("top", [])
+                if top_rows:
+                    st.dataframe(pd.DataFrame(top_rows), width="stretch")
                 else:
-                    st.info("No ranked candidates in latest snapshot.")
-        else:
-            st.info("No scanner snapshot found yet.")
+                    analyzed_rows = snapshot.get("top_analyzed", [])
+                    if analyzed_rows:
+                        st.info("No BUY candidates in latest snapshot. Showing top analyzed symbols.")
+                        st.dataframe(pd.DataFrame(analyzed_rows), width="stretch")
+                    else:
+                        st.info("No ranked candidates in latest snapshot.")
+            else:
+                st.info("No scanner snapshot found yet.")
 
     _live_panels()
 
