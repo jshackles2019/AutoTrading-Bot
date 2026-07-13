@@ -44,12 +44,15 @@ def _latest_file(folder: Path, pattern: str) -> Optional[Path]:
     return files[0] if files else None
 
 
-def _read_last_lines(path: Path, max_lines: int = 200) -> str:
+def _read_last_lines(path: Path, max_lines: int = 200, newest_first: bool = False) -> str:
     if not path.exists():
         return ""
     text = path.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
-    return "\n".join(lines[-max_lines:])
+    tail = lines[-max_lines:]
+    if newest_first:
+        tail = list(reversed(tail))
+    return "\n".join(tail)
 
 
 def _run_python(args: list[str], env_overrides: Optional[dict[str, str]] = None) -> tuple[int, str, str]:
@@ -543,14 +546,18 @@ with right:
         latest_log = _latest_file(DATA_LOGS, "bot_*.log")
         if latest_log:
             st.caption(f"File: `{latest_log.name}`")
-            st.text_area("log", _read_last_lines(latest_log, max_lines=120), height=260)
+            st.text_area("log", _read_last_lines(latest_log, max_lines=120, newest_first=True), height=260)
         else:
             st.info("No bot logs found yet.")
 
         st.subheader("Background Runner Log")
         if BG_OUTPUT_FILE.exists():
             st.caption(f"File: `{BG_OUTPUT_FILE.name}`")
-            st.text_area("background-log", _read_last_lines(BG_OUTPUT_FILE, max_lines=120), height=220)
+            st.text_area(
+                "background-log",
+                _read_last_lines(BG_OUTPUT_FILE, max_lines=120, newest_first=True),
+                height=220,
+            )
         else:
             st.info("No background runner log found yet.")
 
