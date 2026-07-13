@@ -192,6 +192,56 @@ Open:
 - Prefer a private tunnel/VPN such as Tailscale, ZeroTier, or WireGuard.
 - Access the UI over the VPN address: `http://<vpn-host-ip>:8501`
 
+##### Tailscale on Windows 11 (step-by-step)
+
+1. Install Tailscale on the Windows 11 host running the UI.
+   - Download from `https://tailscale.com/download`
+   - Sign in to your Tailscale account (tailnet).
+2. Install Tailscale on the remote device (laptop/phone) and sign in to the same tailnet.
+3. On the host, copy the Tailscale IPv4 address from the Tailscale app (usually `100.x.x.x`).
+4. Start the UI from repo root:
+
+```powershell
+cd /home/runner/work/AutoTrading-Bot/AutoTrading-Bot
+./scripts/run_ui.ps1 -Port 8501
+```
+
+5. Allow inbound TCP `8501` on Windows Firewall (host):
+
+```powershell
+New-NetFirewallRule -DisplayName "AutoTradingBot Streamlit 8501 (Tailscale)" -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8501 -Profile Private,Domain
+```
+
+6. From the remote device (connected to Tailscale), open:
+   - `http://<HOST_TAILSCALE_IP>:8501`
+   - Example: `http://100.101.102.103:8501`
+7. Lock down access in Tailscale admin:
+   - Enable MFA/SSO policy for your users.
+   - Restrict who can reach the host with ACLs.
+
+Minimal ACL example (replace values for your tailnet):
+
+```json
+{
+  "acls": [
+    {
+      "action": "accept",
+      "src": ["group:trading-admins"],
+      "dst": ["autotrading-host:8501"]
+    }
+  ],
+  "tagOwners": {
+    "tag:autotrading-host": ["group:trading-admins"]
+  }
+}
+```
+
+Quick troubleshooting:
+- Verify Streamlit is running on host and bound to port `8501`.
+- Confirm both devices are connected to the same tailnet.
+- Re-check Windows Firewall rule and host Tailscale IP.
+- Restart Tailscale on host if connectivity is stale.
+
 #### Public internet exposure (higher risk)
 
 - Do not expose raw Streamlit directly on `8501`.
