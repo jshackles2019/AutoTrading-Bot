@@ -319,6 +319,30 @@ Run dashboard:
 Open:
 - `http://localhost:8501`
 
+### Performance page
+
+The `Performance` page includes:
+- Cumulative P/L chart over time
+- Drawdown chart and max drawdown metrics
+- Aggregated P/L chart with day/week/month toggle
+- Monthly P/L bars
+- Symbol-level P/L bars and sortable symbol summary table
+- Downloadable CSV export for filtered results
+
+Filters support date range, months, symbols, and side.
+
+### Email report delivery from Performance page
+
+Set these environment variables to enable `Send report email`:
+- `REPORT_EMAIL_SMTP_HOST`
+- `REPORT_EMAIL_SMTP_PORT` (example: `587`)
+- `REPORT_EMAIL_SMTP_USERNAME`
+- `REPORT_EMAIL_SMTP_PASSWORD`
+- `REPORT_EMAIL_FROM` (optional, defaults to username)
+- `REPORT_EMAIL_TO` (optional default recipient shown in UI)
+
+The UI sends the currently filtered report as a CSV attachment.
+
 ### Access from Other Devices
 
 #### Internal network (same LAN)

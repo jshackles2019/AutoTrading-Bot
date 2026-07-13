@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+from email.message import EmailMessage
+import os
 from pathlib import Path
-from typing import Optional
+import smtplib
 
 import altair as alt
 import pandas as pd
@@ -139,6 +141,164 @@ def _metric_row(df: pd.DataFrame) -> None:
     c3.metric("Average P/L", f"${avg_pnl:,.2f}")
     c4.metric("Win rate", f"{win_rate:.1f}%")
     c5.metric("Top symbol", best_symbol)
+
+
+def _with_drawdown(df: pd.DataFrame) -> pd.DataFrame:
+    """Return dataframe enriched with running peak and drawdown metrics."""
+    out = df.copy()
+    out["cum_pnl"] = out["pnl"].cumsum()
+    out["running_peak_pnl"] = out["cum_pnl"].cummax()
+    out["drawdown"] = out["cum_pnl"] - out["running_peak_pnl"]
+    out["drawdown_pct"] = 0.0
+    positive_peak = out["running_peak_pnl"] > 0
+    out.loc[positive_peak, "drawdown_pct"] = out.loc[positive_peak, "drawdown"] / out.loc[positive_peak, "running_peak_pnl"]
+    return out
+
+
+def _chart_drawdown(df: pd.DataFrame) -> None:
+    if df.empty or "timestamp_local" not in df.columns:
+        st.info("No timestamped trades available for drawdown chart.")
+        return
+
+    dd_df = _with_drawdown(df)
+    chart = (
+        alt.Chart(dd_df)
+        .mark_area(opacity=0.45)
+        .encode(
+            x=alt.X("timestamp_local:T", title="Time"),
+            y=alt.Y("drawdown:Q", title="Drawdown ($)"),
+            color=alt.value("#f15b6c"),
+            tooltip=[
+                alt.Tooltip("timestamp_local:T", title="Timestamp"),
+                alt.Tooltip("drawdown:Q", title="Drawdown", format=",.2f"),
+                alt.Tooltip("drawdown_pct:Q", title="Drawdown %", format=".2%"),
+                alt.Tooltip("cum_pnl:Q", title="Cumulative P/L", format=",.2f"),
+            ],
+        )
+        .properties(height=260)
+    )
+    st.altair_chart(chart, width="stretch")
+
+
+def _chart_aggregated_pnl(df: pd.DataFrame, granularity: str) -> None:
+    if df.empty:
+        st.info("No trade data available for aggregation chart.")
+        return
+
+    working = df.copy()
+    if "trade_date" not in working.columns:
+        st.info("Trade date is unavailable for aggregation chart.")
+        return
+
+    working = working.dropna(subset=["trade_date"])
+    if working.empty:
+        st.info("No dated trades available for aggregation chart.")
+        return
+
+    if granularity == "day":
+        working["bucket"] = pd.to_datetime(working["trade_date"])
+        title = "Daily P/L"
+    elif granularity == "week":
+        working["bucket"] = pd.to_datetime(working["trade_date"]).dt.to_period("W").dt.start_time
+        title = "Weekly P/L"
+    elif granularity == "month":
+        working["bucket"] = pd.to_datetime(working["trade_date"]).dt.to_period("M").dt.start_time
+        title = "Monthly P/L"
+    else:
+        st.info("Unsupported aggregation granularity.")
+        return
+
+    agg = working.groupby("bucket", as_index=False)["pnl"].sum().sort_values("bucket")
+    if agg.empty:
+        st.info("No aggregated values for the selected filters.")
+        return
+
+    chart = (
+        alt.Chart(agg)
+        .mark_bar()
+        .encode(
+            x=alt.X("bucket:T", title=title + " period"),
+            y=alt.Y("pnl:Q", title=title + " ($)"),
+            color=alt.condition("datum.pnl >= 0", alt.value("#19b37d"), alt.value("#ef476f")),
+            tooltip=[
+                alt.Tooltip("bucket:T", title="Period"),
+                alt.Tooltip("pnl:Q", title="P/L", format=",.2f"),
+            ],
+        )
+        .properties(height=260)
+    )
+    st.altair_chart(chart, width="stretch")
+
+
+def _build_filtered_export(df: pd.DataFrame) -> bytes:
+    """Return CSV bytes for download/email attachment from filtered trades."""
+    export_cols = [
+        "timestamp_local",
+        "trade_date",
+        "trade_month",
+        "symbol",
+        "side",
+        "shares",
+        "entry_price",
+        "exit_price",
+        "pnl",
+        "pnl_pct",
+        "status",
+        "source_file",
+    ]
+    export_cols = [col for col in export_cols if col in df.columns]
+    return df[export_cols].to_csv(index=False).encode("utf-8")
+
+
+def _email_config_status() -> tuple[bool, list[str], dict[str, str]]:
+    """Validate SMTP env config for report delivery."""
+    cfg = {
+        "host": os.getenv("REPORT_EMAIL_SMTP_HOST", "").strip(),
+        "port": os.getenv("REPORT_EMAIL_SMTP_PORT", "587").strip(),
+        "username": os.getenv("REPORT_EMAIL_SMTP_USERNAME", "").strip(),
+        "password": os.getenv("REPORT_EMAIL_SMTP_PASSWORD", "").strip(),
+        "from_addr": os.getenv("REPORT_EMAIL_FROM", "").strip(),
+        "default_to": os.getenv("REPORT_EMAIL_TO", "").strip(),
+    }
+    missing = []
+    for key in ["host", "port", "username", "password"]:
+        if not cfg[key]:
+            missing.append(key)
+    if not cfg["from_addr"]:
+        cfg["from_addr"] = cfg["username"]
+    return len(missing) == 0, missing, cfg
+
+
+def _send_email_report(
+    *,
+    cfg: dict[str, str],
+    recipient: str,
+    subject: str,
+    body: str,
+    attachment_name: str,
+    attachment_bytes: bytes,
+) -> tuple[bool, str]:
+    """Send performance report email with CSV attachment via SMTP."""
+    try:
+        port = int(cfg.get("port", "587"))
+    except Exception:
+        return False, "Invalid REPORT_EMAIL_SMTP_PORT value"
+
+    msg = EmailMessage()
+    msg["From"] = cfg.get("from_addr") or cfg.get("username")
+    msg["To"] = recipient
+    msg["Subject"] = subject
+    msg.set_content(body)
+    msg.add_attachment(attachment_bytes, maintype="text", subtype="csv", filename=attachment_name)
+
+    try:
+        with smtplib.SMTP(cfg["host"], port, timeout=20) as server:
+            server.starttls()
+            server.login(cfg["username"], cfg["password"])
+            server.send_message(msg)
+        return True, "Report email sent"
+    except Exception as exc:
+        return False, str(exc)
 
 
 def _chart_cumulative_pnl(df: pd.DataFrame) -> None:
@@ -307,13 +467,31 @@ if filtered_df.empty:
 
 _metric_row(filtered_df)
 
+dd_view = _with_drawdown(filtered_df)
+max_drawdown = float(dd_view["drawdown"].min()) if not dd_view.empty else 0.0
+max_drawdown_pct = float(dd_view["drawdown_pct"].min()) if not dd_view.empty else 0.0
+dd_col1, dd_col2 = st.columns(2)
+dd_col1.metric("Max drawdown", f"${max_drawdown:,.2f}")
+dd_col2.metric("Max drawdown %", f"{max_drawdown_pct:.2%}")
+
 left, right = st.columns(2)
 with left:
     st.markdown("#### Cumulative P/L over time")
     _chart_cumulative_pnl(filtered_df)
 with right:
-    st.markdown("#### Monthly P/L")
-    _chart_monthly_pnl(filtered_df)
+    st.markdown("#### Drawdown over time")
+    _chart_drawdown(filtered_df)
+
+st.markdown("#### Aggregated P/L")
+agg_col1, agg_col2 = st.columns([1.1, 2.2])
+with agg_col1:
+    aggregation = st.selectbox("Aggregation", options=["day", "week", "month"], index=1)
+with agg_col2:
+    st.caption("Switch between daily, weekly, and monthly rollups for trend visibility.")
+_chart_aggregated_pnl(filtered_df, granularity=aggregation)
+
+st.markdown("#### Monthly P/L")
+_chart_monthly_pnl(filtered_df)
 
 st.markdown("#### P/L by symbol")
 _chart_symbol_pnl(filtered_df)
@@ -325,3 +503,65 @@ with sort_col2:
     sort_direction = st.selectbox("Sort direction", options=["descending", "ascending"], index=0)
 
 _summary_tables(filtered_df, sort_by=sort_by, ascending=sort_direction == "ascending")
+
+st.markdown("#### Export and email report")
+csv_payload = _build_filtered_export(filtered_df)
+st.download_button(
+    label="Download filtered report (CSV)",
+    data=csv_payload,
+    file_name="performance_report_filtered.csv",
+    mime="text/csv",
+    width="stretch",
+)
+
+smtp_ready, missing_cfg, smtp_cfg = _email_config_status()
+if not smtp_ready:
+    st.info(
+        "Email reporting is disabled until SMTP settings are configured. "
+        "Set env vars: REPORT_EMAIL_SMTP_HOST, REPORT_EMAIL_SMTP_PORT, "
+        "REPORT_EMAIL_SMTP_USERNAME, REPORT_EMAIL_SMTP_PASSWORD, REPORT_EMAIL_FROM, REPORT_EMAIL_TO."
+    )
+    st.caption("Missing required values: " + ", ".join(missing_cfg))
+
+default_recipient = smtp_cfg.get("default_to", "")
+recipient_email = st.text_input(
+    "Report recipient email",
+    value=default_recipient,
+    placeholder="name@example.com",
+)
+email_subject = st.text_input(
+    "Email subject",
+    value="AutoTrading Bot Performance Report",
+)
+
+send_report_clicked = st.button("Send report email", type="primary", width="stretch")
+if send_report_clicked:
+    if not smtp_ready:
+        st.error("SMTP settings are incomplete. Configure environment variables first.")
+    elif not recipient_email.strip():
+        st.error("Recipient email is required.")
+    else:
+        total_trades = int(len(filtered_df))
+        total_pnl = float(filtered_df["pnl"].sum())
+        win_rate = float((filtered_df["pnl"] > 0).mean() * 100.0) if total_trades else 0.0
+        body = (
+            "Performance report generated from Streamlit dashboard\n\n"
+            f"Trades: {total_trades}\n"
+            f"Total P/L: ${total_pnl:,.2f}\n"
+            f"Win rate: {win_rate:.1f}%\n"
+            f"Date range: {start_date} to {end_date}\n"
+            f"Symbols selected: {len(selected_symbols)}\n"
+            f"Months selected: {len(selected_months)}\n"
+        )
+        ok, msg = _send_email_report(
+            cfg=smtp_cfg,
+            recipient=recipient_email.strip(),
+            subject=email_subject.strip() or "AutoTrading Bot Performance Report",
+            body=body,
+            attachment_name="performance_report_filtered.csv",
+            attachment_bytes=csv_payload,
+        )
+        if ok:
+            st.success(msg)
+        else:
+            st.error(f"Failed to send report email: {msg}")
