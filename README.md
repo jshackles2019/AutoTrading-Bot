@@ -140,6 +140,10 @@ Paper mode with US universe (capped):
 ./scripts/run_bot.ps1 -AccountMode paper -DryRun -SymbolUniverse us-all -MaxSymbols 300
 ```
 
+By default, capped US-universe scans use rotating selection so each loop scans a different batch.
+Use `-ScanSelection random` for random batches, or `-ScanSelection first` to keep the legacy fixed-first behavior.
+Set `-MaxSymbols 0` for no scan cap.
+
 Paper mode with ranking + filters:
 
 ```powershell

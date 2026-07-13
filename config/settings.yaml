@@ -3,6 +3,20 @@
 symbols:
   - AAPL
   - SPY
+  - TSLA
+  - AMZN
+  - MSFT
+  - GOOGL
+  - NVDA
+  - META
+  - NFLX
+  - AMD
+  - INTC
+  - SPCX
+  - WMT
+  - DIS
+  - INTC
+  - AMZN
 
 timeframe: 5Min
 lookback: 50

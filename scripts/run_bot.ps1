@@ -11,6 +11,8 @@ Param(
     [ValidateSet("config", "us-all")]
     [string]$SymbolUniverse = "config",
     [int]$MaxSymbols = 200,
+    [ValidateSet("first", "random", "rotating")]
+    [string]$ScanSelection = "rotating",
     [int]$TopCandidates,
     [double]$MinPrice,
     [double]$MaxPrice,
@@ -56,6 +58,9 @@ if ($SmokeTest) {
         $cmdParts += @("--symbol-universe", $SymbolUniverse)
         if ($PSBoundParameters.ContainsKey("MaxSymbols")) {
             $cmdParts += @("--max-symbols", "$MaxSymbols")
+        }
+        if ($PSBoundParameters.ContainsKey("ScanSelection")) {
+            $cmdParts += @("--scan-selection", $ScanSelection)
         }
     }
     if ($Symbols) {

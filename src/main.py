@@ -7,6 +7,7 @@ manages risk, and executes trades during market hours.
 
 import argparse
 import json
+import random
 import time
 import sys
 from datetime import datetime, timedelta
@@ -50,11 +51,11 @@ def _resolve_symbols(
     symbol_universe: str,
     symbols_csv: Optional[str],
     append_symbols: bool,
-    max_symbols: Optional[int],
 ) -> List[str]:
     """Resolve final symbol list from config, CLI overrides, and optional universe mode."""
     if symbol_universe == "us-all":
-        base_symbols = alpaca_client.get_tradeable_us_symbols(max_symbols=max_symbols)
+        # Pull the full active universe first; scan capping/selection happens later.
+        base_symbols = alpaca_client.get_tradeable_us_symbols(max_symbols=None)
     else:
         base_symbols = list(config.get("symbols", []))
 
@@ -116,6 +117,13 @@ def _resolve_scanner_config(config: Dict[str, Any], args: argparse.Namespace) ->
         weights["momentum"] = args.weight_momentum
     scanner["score_weights"] = weights
 
+    scanner["max_symbols"] = args.max_symbols if args.max_symbols and args.max_symbols > 0 else None
+    if args.scan_selection is not None:
+        scanner["scan_selection"] = args.scan_selection
+
+    scanner.setdefault("max_symbols", None)
+    scanner.setdefault("scan_selection", "rotating")
+
     config["scanner"] = scanner
     return scanner
 
@@ -152,6 +160,8 @@ class TradingSession:
         self.session_pnl = 0.0
         self.trades_closed = 0
         self.wins = 0
+        self.scan_cursor = 0
+        self._rng = random.Random()
     
     def run(self):
         """Run the main trading loop."""
@@ -220,8 +230,10 @@ class TradingSession:
         # Check active positions for exits
         self._check_exits(account)
 
+        selected_symbols = self._select_scan_symbols(symbols, scanner_cfg)
+
         # Scan and rank symbols, then evaluate risk on top candidates.
-        ranked_candidates = self._scan_and_rank(symbols, timeframe, lookback, scanner_cfg)
+        ranked_candidates = self._scan_and_rank(selected_symbols, timeframe, lookback, scanner_cfg)
 
         for candidate in ranked_candidates:
             symbol = candidate["symbol"]
@@ -242,6 +254,41 @@ class TradingSession:
                 continue
 
             self._execute_buy(symbol, signal, risk_decision)
+
+    def _select_scan_symbols(self, symbols: List[str], scanner_cfg: Dict[str, Any]) -> List[str]:
+        """Select scan symbols based on max cap and selection strategy."""
+        if not symbols:
+            return []
+
+        max_symbols = scanner_cfg.get("max_symbols")
+        if max_symbols is None:
+            return symbols
+
+        try:
+            max_symbols = int(max_symbols)
+        except (TypeError, ValueError):
+            return symbols
+
+        if max_symbols <= 0 or max_symbols >= len(symbols):
+            return symbols
+
+        selection = str(scanner_cfg.get("scan_selection", "rotating")).lower()
+
+        if selection == "random":
+            return self._rng.sample(symbols, max_symbols)
+
+        if selection == "rotating":
+            start = self.scan_cursor % len(symbols)
+            end = start + max_symbols
+            if end <= len(symbols):
+                selected = symbols[start:end]
+            else:
+                overflow = end - len(symbols)
+                selected = symbols[start:] + symbols[:overflow]
+            self.scan_cursor = (start + max_symbols) % len(symbols)
+            return selected
+
+        return symbols[:max_symbols]
 
     def _scan_and_rank(
         self,
@@ -672,7 +719,9 @@ def main():
     parser.add_argument("--symbol-universe", choices=["config", "us-all"], default="config",
                         help="Symbol source: config list or all active tradeable US equities")
     parser.add_argument("--max-symbols", type=int, default=200,
-                        help="Cap symbols when using --symbol-universe us-all (set <=0 for no cap)")
+                        help="Max symbols scanned per loop (set <=0 for no cap)")
+    parser.add_argument("--scan-selection", choices=["first", "random", "rotating"], default="rotating",
+                        help="How to choose symbols when --max-symbols caps the universe")
     parser.add_argument("--top-candidates", type=int, default=None,
                         help="Number of top ranked symbols to evaluate for entries each loop")
     parser.add_argument("--min-price", type=float, default=None,
@@ -702,13 +751,11 @@ def main():
         print("Loading configuration...")
         config = utils.load_config()
 
-        max_symbols = args.max_symbols if args.max_symbols and args.max_symbols > 0 else None
         resolved_symbols = _resolve_symbols(
             config,
             symbol_universe=args.symbol_universe,
             symbols_csv=args.symbols,
             append_symbols=args.append_symbols,
-            max_symbols=max_symbols,
         )
         config["symbols"] = resolved_symbols
         scanner_cfg = _resolve_scanner_config(config, args)
@@ -724,6 +771,8 @@ def main():
             print(f"  Min avg volume: {scanner_cfg.get('min_average_volume')}")
         print(f"  Volume ratio cap: {scanner_cfg.get('volume_ratio_cap')}")
         print(f"  Score weights: {scanner_cfg.get('score_weights')}")
+        print(f"  Scan max symbols: {scanner_cfg.get('max_symbols') or 'unlimited'}")
+        print(f"  Scan selection: {scanner_cfg.get('scan_selection')}")
         print(f"  Timeframe: {config.get('timeframe')}")
         print(f"  Max trades/day: {config.get('risk', {}).get('max_trades_per_day')}")
 
