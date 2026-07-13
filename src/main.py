@@ -32,6 +32,7 @@ except ImportError:
 
 DATA_UI_DIR = Path(__file__).resolve().parents[1] / "data" / "ui"
 SCANNER_SNAPSHOT_PATH = DATA_UI_DIR / "scanner_snapshot.json"
+STOP_SCANS_FLAG_PATH = DATA_UI_DIR / "stop_scans.flag"
 
 
 def _parse_symbols(symbols_csv: Optional[str]) -> List[str]:
@@ -162,6 +163,10 @@ class TradingSession:
         self.wins = 0
         self.scan_cursor = 0
         self._rng = random.Random()
+
+    def _stop_requested(self) -> bool:
+        """Check whether a manual scan-stop request has been signaled by the UI."""
+        return STOP_SCANS_FLAG_PATH.exists()
     
     def run(self):
         """Run the main trading loop."""
@@ -187,6 +192,10 @@ class TradingSession:
                 return utils.is_market_open() or self.bypass_market_hours
             
             while _can_run_loop():
+                if self._stop_requested():
+                    self.logger.logger.warning("Manual stop requested. Ending trading session.")
+                    break
+
                 loop_count += 1
                 self.logger.logger.debug(f"\n--- Loop {loop_count} ---")
                 
@@ -236,6 +245,10 @@ class TradingSession:
         ranked_candidates = self._scan_and_rank(selected_symbols, timeframe, lookback, scanner_cfg)
 
         for candidate in ranked_candidates:
+            if self._stop_requested():
+                self.logger.logger.warning("Manual stop requested. Halting candidate evaluation.")
+                break
+
             symbol = candidate["symbol"]
             signal = candidate["signal"]
 
@@ -308,6 +321,10 @@ class TradingSession:
         buy_signals = 0
 
         for symbol in symbols:
+            if self._stop_requested():
+                self.logger.logger.warning("Manual stop requested during symbol scan.")
+                break
+
             scanned += 1
             try:
                 bars = alpaca_client.get_bars(symbol, timeframe, lookback)

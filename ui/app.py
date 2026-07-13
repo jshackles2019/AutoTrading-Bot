@@ -26,6 +26,7 @@ DATA_UI = ROOT / "data" / "ui"
 BG_STATE_FILE = DATA_UI / "background_runner.json"
 BG_OUTPUT_FILE = DATA_LOGS / "background_runner.log"
 SCANNER_SNAPSHOT_FILE = DATA_UI / "scanner_snapshot.json"
+STOP_SCANS_FLAG_FILE = DATA_UI / "stop_scans.flag"
 SRC_MAIN = ROOT / "src" / "main.py"
 
 if str(ROOT) not in sys.path:
@@ -86,6 +87,23 @@ def _load_bg_state() -> Optional[dict]:
 def _clear_bg_state() -> None:
     if BG_STATE_FILE.exists():
         BG_STATE_FILE.unlink()
+
+
+def _set_scan_stop() -> None:
+    DATA_UI.mkdir(parents=True, exist_ok=True)
+    STOP_SCANS_FLAG_FILE.write_text(
+        datetime.now().isoformat(timespec="seconds"),
+        encoding="utf-8",
+    )
+
+
+def _clear_scan_stop() -> None:
+    if STOP_SCANS_FLAG_FILE.exists():
+        STOP_SCANS_FLAG_FILE.unlink()
+
+
+def _scan_stop_requested() -> bool:
+    return STOP_SCANS_FLAG_FILE.exists()
 
 
 def _pid_running(pid: int) -> bool:
@@ -365,6 +383,7 @@ with left:
         if live_guard_required and not dry_run and not smoke_test and live_confirm_token != "LIVE-TRADE-YES":
             st.error("Live trading blocked. Enter token LIVE-TRADE-YES to proceed.")
         else:
+            _clear_scan_stop()
             rc, out, err = _run_python(run_args, env_overrides=env_overrides)
             st.session_state["last_run"] = {
                 "when": datetime.now().isoformat(timespec="seconds"),
@@ -386,12 +405,29 @@ with left:
         st.write(f"PID: `{bg_state['pid']}`")
     if bg_state and bg_state.get("command"):
         st.write(f"Command: `{bg_state['command']}`")
+    st.write(f"Scan stop requested: {'Yes' if _scan_stop_requested() else 'No'}")
 
-    start_col, stop_col = st.columns(2)
+    start_col, stop_col, req_stop_col, clear_stop_col = st.columns(4)
     with start_col:
         start_bg_clicked = st.button("Start Background", use_container_width=True)
     with stop_col:
         stop_bg_clicked = st.button("Stop Background", use_container_width=True)
+    with req_stop_col:
+        request_scan_stop_clicked = st.button("Request Scan Stop", use_container_width=True)
+    with clear_stop_col:
+        clear_scan_stop_clicked = st.button("Clear Stop", use_container_width=True)
+
+    if request_scan_stop_clicked:
+        _set_scan_stop()
+        stopped = _stop_background()
+        if stopped:
+            st.success("Stop requested and background process terminated.")
+        else:
+            st.info("Stop requested. Active scanning process will stop on its next check.")
+
+    if clear_scan_stop_clicked:
+        _clear_scan_stop()
+        st.success("Manual stop flag cleared.")
 
     if start_bg_clicked:
         if _is_bg_running():
@@ -399,6 +435,7 @@ with left:
         elif live_guard_required and not dry_run and not smoke_test and live_confirm_token != "LIVE-TRADE-YES":
             st.error("Live background run blocked. Enter token LIVE-TRADE-YES to proceed.")
         else:
+            _clear_scan_stop()
             state = _start_background(run_args, env_overrides=env_overrides)
             state["account_mode"] = account_mode
             _save_bg_state(state)
