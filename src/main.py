@@ -242,6 +242,40 @@ class TradingSession:
         self.force_halt_after_loops = test_hooks.get("force_halt_after_loops")
         self.force_halt_reason = str(test_hooks.get("force_halt_reason", "Forced halt test hook"))
 
+        self._restore_runtime_context()
+
+    def _restore_runtime_context(self) -> None:
+        """Restore breaker-related runtime context so restarts preserve protections."""
+        if not RUNTIME_STATUS_PATH.exists():
+            return
+        try:
+            payload = json.loads(RUNTIME_STATUS_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        self.consecutive_losses = int(payload.get("consecutive_losses", self.consecutive_losses) or 0)
+        self.session_start_equity = payload.get("session_start_equity", self.session_start_equity)
+
+        cooldowns = payload.get("symbol_cooldowns")
+        if isinstance(cooldowns, dict):
+            restored: Dict[str, float] = {}
+            for symbol, ts in cooldowns.items():
+                key = str(symbol).upper()
+                try:
+                    restored[key] = float(ts)
+                except (TypeError, ValueError):
+                    continue
+            if restored:
+                self.symbol_cooldowns = restored
+
+    def _reset_runtime_context(self, clear_cooldowns: bool = False) -> None:
+        """Reset persisted runtime breaker context, optionally clearing symbol cooldowns."""
+        self.consecutive_losses = 0
+        self.halt_reason = None
+        if clear_cooldowns:
+            self.symbol_cooldowns = {}
+        self._write_runtime_status("reset", "Runtime context reset")
+
     def _write_runtime_status(self, status: str, message: str, account_equity: Optional[float] = None) -> None:
         """Persist runtime/circuit-breaker status for the UI."""
         try:
@@ -263,6 +297,7 @@ class TradingSession:
                     "max_open_positions": self.max_open_positions,
                     "symbol_cooldown_minutes": self.symbol_cooldown_minutes,
                 },
+                "symbol_cooldowns": self.symbol_cooldowns,
             }
             RUNTIME_STATUS_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         except Exception:
@@ -993,6 +1028,10 @@ def main():
                         help="Test hook: force a circuit-breaker halt after N loops (0 = immediate)")
     parser.add_argument("--test-force-halt-reason", type=str, default="Forced halt test hook",
                         help="Test hook: halt reason text written when forced halt triggers")
+    parser.add_argument("--reset-runtime-status", action="store_true",
+                        help="Reset persisted runtime breaker state and exit")
+    parser.add_argument("--reset-runtime-clear-cooldowns", action="store_true",
+                        help="Used with --reset-runtime-status to also clear symbol cooldown history")
     args = parser.parse_args()
 
     print("\n" + "="*60)
@@ -1046,6 +1085,17 @@ def main():
         print(f"  Max consecutive losses: {risk_cfg.get('max_consecutive_losses')}")
         if args.test_force_halt_after_loops is not None:
             print(f"  Test forced halt loops: {args.test_force_halt_after_loops}")
+
+        if args.reset_runtime_status:
+            session = TradingSession(
+                config,
+                dry_run=True,
+                max_loops=1,
+                bypass_market_hours=True,
+            )
+            session._reset_runtime_context(clear_cooldowns=args.reset_runtime_clear_cooldowns)
+            print("[OK] Runtime breaker state reset.")
+            return 0
 
         if args.smoke_test:
             return _run_smoke_test()

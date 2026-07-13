@@ -75,6 +75,13 @@ def _run_python(args: list[str], env_overrides: Optional[dict[str, str]] = None)
     return process.returncode, process.stdout, process.stderr
 
 
+def _reset_runtime_status(clear_cooldowns: bool, env_overrides: Optional[dict[str, str]] = None) -> tuple[int, str, str]:
+    args = ["--reset-runtime-status"]
+    if clear_cooldowns:
+        args.append("--reset-runtime-clear-cooldowns")
+    return _run_python(args, env_overrides=env_overrides)
+
+
 def _save_bg_state(state: dict) -> None:
     DATA_UI.mkdir(parents=True, exist_ok=True)
     BG_STATE_FILE.write_text(json.dumps(state, indent=2), encoding="utf-8")
@@ -1006,6 +1013,8 @@ with left:
     if runtime_status:
         st.caption("Runtime Circuit Breakers")
         st.write(f"Runtime status: **{runtime_status.get('status', 'unknown')}**")
+        if runtime_status.get("updated_at"):
+            st.write(f"Last update: `{runtime_status.get('updated_at')}`")
         if runtime_status.get("halt_reason"):
             st.error(f"Halt reason: {runtime_status.get('halt_reason')}")
         if runtime_status.get("message"):
@@ -1024,6 +1033,30 @@ with left:
             f"max open positions: {breakers.get('max_open_positions', 'N/A')} | "
             f"cooldown min: {breakers.get('symbol_cooldown_minutes', 'N/A')}"
         )
+
+        rc_actions_1, rc_actions_2 = st.columns(2)
+        with rc_actions_1:
+            acknowledge_halt_clicked = st.button("Acknowledge/Reset Halt", use_container_width=True)
+        with rc_actions_2:
+            clear_cooldowns_clicked = st.button("Reset Halt + Clear Cooldowns", use_container_width=True)
+
+        if acknowledge_halt_clicked or clear_cooldowns_clicked:
+            rc, out, err = _reset_runtime_status(
+                clear_cooldowns=bool(clear_cooldowns_clicked),
+                env_overrides=env_overrides,
+            )
+            if rc == 0:
+                if clear_cooldowns_clicked:
+                    st.success("Runtime halt acknowledged and cooldown history cleared.")
+                else:
+                    st.success("Runtime halt acknowledged/reset.")
+                st.rerun()
+            else:
+                st.error("Failed to reset runtime status.")
+                if out:
+                    st.text_area("reset-runtime-stdout", out, height=120)
+                if err:
+                    st.text_area("reset-runtime-stderr", err, height=120)
 
     start_col, stop_col, req_stop_col, clear_stop_col = st.columns(4)
     with start_col:

@@ -206,6 +206,18 @@ Deterministic test hook flags (CLI only, useful for automated circuit-breaker te
 - `--test-force-halt-after-loops N` forces a halted runtime state after loop `N` (`0` = immediate).
 - `--test-force-halt-reason "text"` sets the halt reason written to `data/ui/runtime_status.json`.
 
+Runtime breaker context persistence:
+- `consecutive_losses` and `symbol_cooldowns` are persisted in `data/ui/runtime_status.json` and restored on restart.
+- This keeps breaker protections active across watchdog/bot restarts.
+
+Runtime reset controls:
+- UI Home page provides:
+  - `Acknowledge/Reset Halt`
+  - `Reset Halt + Clear Cooldowns`
+- CLI equivalents:
+  - `--reset-runtime-status`
+  - `--reset-runtime-clear-cooldowns` (used with `--reset-runtime-status`)
+
 The script sets `ALPACA_PAPER` automatically per run:
 - `-AccountMode paper` => `ALPACA_PAPER=True`
 - `-AccountMode live` => `ALPACA_PAPER=False`
