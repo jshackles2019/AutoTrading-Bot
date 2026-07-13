@@ -272,6 +272,7 @@ class TradingSession:
         self.entry_lockout = False
         self.entry_lockout_reason: Optional[str] = None
         self._schedule_notified = False
+        self.preflight_enabled = True
 
         risk_cfg = self.config.get("risk", {})
         self.max_daily_drawdown_pct = risk_cfg.get("max_daily_drawdown_pct")
@@ -281,7 +282,9 @@ class TradingSession:
         self.session_start_equity: Optional[float] = None
 
         automation_cfg = self.config.get("automation", {}) if isinstance(self.config, dict) else {}
+        preflight_cfg = automation_cfg.get("preflight", {}) if isinstance(automation_cfg, dict) else {}
         schedule_cfg = automation_cfg.get("trading_window", {}) if isinstance(automation_cfg, dict) else {}
+        self.preflight_enabled = bool(preflight_cfg.get("enabled", True))
         self.schedule_enabled = bool(schedule_cfg.get("enabled", False))
         self.schedule_start = str(schedule_cfg.get("start", "09:30"))
         self.schedule_end = str(schedule_cfg.get("end", "16:00"))
@@ -410,6 +413,46 @@ class TradingSession:
                 f"Local tracked symbols={sorted(local_symbols)}"
             )
 
+    def _fail_preflight(self, reason: str, account_equity: Optional[float] = None) -> bool:
+        """Record preflight failure, notify operators, and stop startup."""
+        self.logger.logger.error(f"PREFLIGHT BLOCK | {reason}")
+        self._write_runtime_status("blocked_preflight", reason, account_equity=account_equity)
+        notify_discord("preflight_block", reason, title="Breakout Bot Preflight Blocked")
+        return False
+
+    def _run_preflight_gate(self, account: Dict[str, Any]) -> bool:
+        """Run startup preflight checks and return True only when safe to proceed."""
+        if not self.preflight_enabled:
+            return True
+
+        # Account status sanity
+        status_text = str(account.get("status", "")).strip().lower()
+        allowed_status = {"active", "active account"}
+        if status_text and status_text not in allowed_status:
+            return self._fail_preflight(f"Account status is '{account.get('status')}', expected active status")
+
+        # Buying power sanity
+        try:
+            buying_power = float(account.get("buying_power", 0.0) or 0.0)
+        except Exception:
+            buying_power = 0.0
+        if buying_power <= 0:
+            return self._fail_preflight("Buying power is zero or unavailable")
+
+        # Existing lockout/halts in persisted runtime state should block unattended startup.
+        if self.entry_lockout:
+            return self._fail_preflight(
+                f"Entry lockout already active from prior run: {self.entry_lockout_reason or 'unspecified'}",
+                account_equity=float(account.get("equity", 0.0) or 0.0),
+            )
+        if self.halt_reason:
+            return self._fail_preflight(
+                f"Prior halt state present: {self.halt_reason}",
+                account_equity=float(account.get("equity", 0.0) or 0.0),
+            )
+
+        return True
+
     def _write_runtime_status(self, status: str, message: str, account_equity: Optional[float] = None) -> None:
         """Persist runtime/circuit-breaker status for the UI."""
         try:
@@ -438,6 +481,9 @@ class TradingSession:
                     "start": self.schedule_start,
                     "end": self.schedule_end,
                     "weekdays": self.schedule_weekdays,
+                },
+                "preflight": {
+                    "enabled": self.preflight_enabled,
                 },
                 "symbol_cooldowns": self.symbol_cooldowns,
             }
@@ -518,6 +564,9 @@ class TradingSession:
             self.session_start_equity = float(account.get("equity", 0.0) or 0.0)
             self.logger.logger.info(f"Account equity: ${account['equity']:,.2f}")
             self.logger.logger.info(f"Buying power: ${account['buying_power']:,.2f}")
+
+            if not self._run_preflight_gate(account):
+                return
 
             if not self._enforce_schedule_gate(account_equity=self.session_start_equity, phase="startup"):
                 return

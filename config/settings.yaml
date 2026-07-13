@@ -23,6 +23,8 @@ lookback: 50
 loop_interval_seconds: 60
 
 automation:
+  preflight:
+    enabled: true
   trading_window:
     enabled: true
     start: "09:30"

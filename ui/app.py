@@ -1017,6 +1017,8 @@ with left:
             st.write(f"Last update: `{runtime_status.get('updated_at')}`")
         if runtime_status.get("halt_reason"):
             st.error(f"Halt reason: {runtime_status.get('halt_reason')}")
+        if runtime_status.get("status") == "blocked_preflight":
+            st.error("Preflight gate blocked startup. Review runtime note and account/runtime state before restart.")
         if runtime_status.get("message"):
             st.write(f"Runtime note: {runtime_status.get('message')}")
         if runtime_status.get("entry_lockout"):

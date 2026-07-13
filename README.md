@@ -32,7 +32,7 @@ Set `ALPACA_PAPER=False` only when you intentionally want live trading mode.
 Discord notifications are optional:
 - `DISCORD_WEBHOOK_URL`: Discord incoming webhook URL
 - `DISCORD_NOTIFY_EVENTS`: comma-separated event keys to send (optional)
-  - Python defaults: `circuit_halt,fatal_error,reconciliation_mismatch,schedule_block,session_summary,watchdog_restart,watchdog_stop`
+  - Python defaults: `circuit_halt,fatal_error,preflight_block,reconciliation_mismatch,schedule_block,session_summary,watchdog_restart,watchdog_stop`
   - Watchdog defaults when unset: `watchdog_restart,watchdog_stop`
 
 Update `config/settings.yaml` for symbols/timeframe/risk values.
@@ -235,6 +235,15 @@ Strict trading schedule gate:
 - Default window is Mon-Fri 09:30-16:00 America/New_York and is enabled by default.
 - Bot will stop/avoid starting trading loops outside this window even when market checks are bypassed.
 
+Startup preflight gate:
+- Configured under `automation.preflight.enabled` in `config/settings.yaml` (default `true`).
+- Blocks startup if any check fails, writing `status=blocked_preflight` to runtime status:
+  - account status is not active
+  - buying power is non-positive/unavailable
+  - prior entry lockout is still active
+  - prior halt reason is still present
+- Sends `preflight_block` Discord event when a preflight check blocks startup.
+
 Startup reconciliation safe mode:
 - On session start, broker open positions are reconciled against locally tracked active positions.
 - If they do not match, bot enters safe-mode entry lockout (no new entries) and writes lockout state to `data/ui/runtime_status.json`.
@@ -258,6 +267,7 @@ Schedule gate CLI overrides:
 Notification event keys:
 - `circuit_halt`: circuit breaker halts a session
 - `fatal_error`: unhandled runtime failure in trading loop
+- `preflight_block`: startup preflight checklist blocked run startup
 - `reconciliation_mismatch`: startup position reconciliation mismatch triggers safe-mode entry lockout
 - `schedule_block`: strict schedule gate blocked startup or runtime loop continuation
 - `session_summary`: session summary posted at session close

@@ -12,6 +12,7 @@ from urllib import request
 DEFAULT_EVENTS = {
     "circuit_halt",
     "fatal_error",
+    "preflight_block",
     "reconciliation_mismatch",
     "schedule_block",
     "session_summary",
