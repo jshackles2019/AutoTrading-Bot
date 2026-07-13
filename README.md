@@ -117,6 +117,7 @@ Optional:
 ./scripts/run_ui.ps1 -Port 8502
 ./scripts/run_ui.ps1 -Headless
 ./scripts/run_ui.ps1 -Address 127.0.0.1   # local-only binding
+./scripts/run_ui.ps1 -Address tailscale    # prefer the host Tailscale IPv4
 ```
 
 ### Run bot with explicit account mode
@@ -173,7 +174,7 @@ The script sets `ALPACA_PAPER` automatically per run:
 Run dashboard:
 
 ```bash
-C:/Users/John/AppData/Local/Python/pythoncore-3.14-64/python.exe -m streamlit run ui/app.py --server.address 0.0.0.0 --server.port 8501
+./scripts/run_ui.ps1 -Port 8501
 ```
 
 Open:
@@ -203,7 +204,7 @@ Open:
 
 ```powershell
 cd C:\path\to\AutoTrading-Bot
-python -m streamlit run ui/app.py --server.address 0.0.0.0 --server.port 8501
+./scripts/run_ui.ps1 -Port 8501
 ```
 
 If PowerShell blocks `run_ui.ps1`, use the direct `python -m streamlit ...` command above, or run this once in the current PowerShell window before calling the script:
