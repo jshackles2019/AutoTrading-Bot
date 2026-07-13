@@ -555,33 +555,43 @@ with left:
     st.divider()
     st.subheader("Manual Order Ticket")
     st.caption("Place one-off buy/sell orders from the dashboard.")
-    with st.form("manual-order-form"):
-        manual_symbol = st.text_input("Symbol", value="AAPL").strip().upper()
-        col_side, col_type, col_size_mode = st.columns(3)
-        with col_side:
-            manual_side = st.selectbox("Side", options=["buy", "sell"])
-        with col_type:
-            manual_type = st.selectbox("Order type", options=["market", "limit"])
-        with col_size_mode:
-            manual_size_mode = st.selectbox("Order size", options=["shares", "dollars"])
+    manual_symbol = st.text_input("Symbol", value="AAPL", key="manual_symbol").strip().upper()
+    col_side, col_type, col_size_mode = st.columns(3)
+    with col_side:
+        manual_side = st.selectbox("Side", options=["buy", "sell"], key="manual_side")
+    with col_type:
+        manual_type = st.selectbox("Order type", options=["market", "limit"], key="manual_type")
+    with col_size_mode:
+        manual_size_mode = st.selectbox("Order size", options=["shares", "dollars"], key="manual_size_mode")
 
-        manual_qty = None
-        manual_notional = None
-        if manual_size_mode == "shares":
-            manual_qty = st.number_input("Quantity", min_value=1, max_value=1000000, value=1, step=1)
-        else:
-            st.caption("Dollar sizing uses Alpaca notional market orders for fractional-capable assets.")
-            manual_notional = st.number_input("Dollar amount", min_value=1.0, max_value=10000000.0, value=100.0, step=1.0)
+    manual_qty = None
+    manual_notional = None
+    if manual_size_mode == "shares":
+        manual_qty = st.number_input("Quantity", min_value=1, max_value=1000000, value=1, step=1, key="manual_qty")
+    else:
+        st.caption("Dollar sizing uses Alpaca notional market orders for fractional-capable assets.")
+        manual_notional = st.number_input(
+            "Dollar amount",
+            min_value=1.0,
+            max_value=10000000.0,
+            value=100.0,
+            step=1.0,
+            key="manual_notional",
+        )
 
-        manual_limit_price = None
-        if manual_type == "limit" and manual_size_mode == "shares":
-            manual_limit_price = st.number_input("Limit price", min_value=0.01, value=1.0, step=0.01)
+    manual_limit_price = None
+    if manual_type == "limit" and manual_size_mode == "shares":
+        manual_limit_price = st.number_input("Limit price", min_value=0.01, value=1.0, step=0.01, key="manual_limit_price")
 
-        live_order_confirmed = True
-        if account_mode == "live":
-            live_order_confirmed = st.checkbox("I understand this will place a live order.", value=False)
+    live_order_confirmed = True
+    if account_mode == "live":
+        live_order_confirmed = st.checkbox(
+            "I understand this will place a live order.",
+            value=False,
+            key="manual_live_order_confirmed",
+        )
 
-        manual_submit = st.form_submit_button("Submit Manual Order", use_container_width=True)
+    manual_submit = st.button("Submit Manual Order", use_container_width=True)
 
     if manual_submit:
         if not _account_keys_present():
