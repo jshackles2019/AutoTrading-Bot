@@ -635,20 +635,20 @@ def _run_smoke_test() -> int:
 
     try:
         account = alpaca_client.get_account()
-        print("✓ Connected to Alpaca account")
+        print("[OK] Connected to Alpaca account")
         print(f"  Equity: ${account['equity']:,.2f}")
         print(f"  Buying power: ${account['buying_power']:,.2f}")
         print(f"  Status: {account['status']}")
 
         bars = alpaca_client.get_bars("AAPL", "5Min", lookback=3)
-        print(f"✓ Retrieved {len(bars)} recent bars for AAPL")
+        print(f"[OK] Retrieved {len(bars)} recent bars for AAPL")
 
         positions = alpaca_client.get_open_positions()
-        print(f"✓ Retrieved {len(positions)} open positions")
+        print(f"[OK] Retrieved {len(positions)} open positions")
 
         return 0
     except Exception as e:
-        print(f"✗ Smoke test failed: {e}")
+        print(f"[ERR] Smoke test failed: {e}")
         import traceback
         traceback.print_exc()
         return 1
@@ -713,7 +713,7 @@ def main():
         config["symbols"] = resolved_symbols
         scanner_cfg = _resolve_scanner_config(config, args)
 
-        print(f"✓ Config loaded")
+        print(f"[OK] Config loaded")
         print(f"  Symbols ({len(config.get('symbols', []))}): {config.get('symbols')[:10]}")
         if len(config.get("symbols", [])) > 10:
             print("  ... (truncated preview)")
@@ -739,20 +739,20 @@ def main():
         
         if not args.skip_market_check and not market_open:
             next_open = utils.next_market_open()
-            print(f"\n✗ Market is closed. Next open: {next_open}")
+            print(f"\n[ERR] Market is closed. Next open: {next_open}")
             return 1
         if args.skip_market_check and not market_open:
-            print("\n! Market check bypassed. Running session anyway.")
+            print("\n[WARN] Market check bypassed. Running session anyway.")
         
         # Start trading session
         if args.dry_run:
-            print("\n✓ Dry-run mode enabled. Orders will be simulated only.")
+            print("\n[OK] Dry-run mode enabled. Orders will be simulated only.")
         if args.max_loops is not None:
             if args.max_loops < 1:
-                print("\n✗ --max-loops must be >= 1")
+                print("\n[ERR] --max-loops must be >= 1")
                 return 1
-            print(f"✓ Loop limit: {args.max_loops}")
-        print("\n✓ Starting trading session...")
+            print(f"[OK] Loop limit: {args.max_loops}")
+        print("\n[OK] Starting trading session...")
         session = TradingSession(
             config,
             dry_run=args.dry_run,
@@ -764,10 +764,10 @@ def main():
         return 0
     
     except FileNotFoundError as e:
-        print(f"✗ Configuration error: {e}")
+        print(f"[ERR] Configuration error: {e}")
         return 1
     except Exception as e:
-        print(f"✗ Fatal error: {e}")
+        print(f"[ERR] Fatal error: {e}")
         import traceback
         traceback.print_exc()
         return 1
