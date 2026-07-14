@@ -16,11 +16,8 @@ venv/
 .pytest_cache/
 .coverage
 
-# Logs and data that shouldn't be committed
-data/logs/
-data/ui/
-# Keep trade history tracked if desired; comment out the next line if you want to store CSVs in repo
-# data/trades/
+# Logs and runtime data
+data/
 
 # Mac / OS
 .DS_Store

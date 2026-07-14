@@ -1,0 +1,10 @@
+{
+  "message": "Bot exited with code 0.",
+  "command": "C:/Users/John/AppData/Local/Python/pythoncore-3.14-64/python.exe src/main.py --dry-run --skip-market-check --max-loops 1 --symbols AAPL",
+  "dry_run": true,
+  "last_exit_code": 0,
+  "restart_count": 0,
+  "updated_at": "2026-07-13T17:27:26.8242747-05:00",
+  "account_mode": "paper",
+  "status": "exited_cleanly"
+}

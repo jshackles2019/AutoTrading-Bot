@@ -1,0 +1,19 @@
+{
+  "timestamp": "2026-07-13T17:27:26",
+  "scanned": 1,
+  "buy_signals": 0,
+  "selected": 0,
+  "top": [],
+  "top_analyzed": [
+    {
+      "symbol": "AAPL",
+      "score": 0.2141,
+      "action": "NONE",
+      "confidence": 0.0,
+      "entry_level": null,
+      "stop_level": null,
+      "target_level": null,
+      "volume_check": false
+    }
+  ]
+}
