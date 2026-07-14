@@ -127,3 +127,42 @@ def test_preflight_skips_stale_data_check_when_market_closed(monkeypatch):
     ok = session._run_preflight_gate({"status": "Active", "buying_power": 1000.0, "equity": 100000.0})
 
     assert ok is True
+
+
+def test_preflight_allows_when_some_probe_symbols_are_fresh(monkeypatch):
+    session = TradingSession(
+        {
+            "symbols": ["AAA", "AAPL", "MSFT"],
+            "timeframe": "5Min",
+            "risk": {},
+            "automation": {
+                "preflight": {
+                    "enabled": True,
+                    "max_market_data_age_minutes": 20,
+                    "symbols_to_check": 3,
+                }
+            },
+        },
+        dry_run=True,
+    )
+    session.entry_lockout = False
+    session.entry_lockout_reason = None
+    session.halt_reason = None
+
+    now_market = main_module.utils.now_market()
+    stale_ts = now_market - timedelta(minutes=500)
+    fresh_ts = now_market - timedelta(minutes=1)
+
+    monkeypatch.setattr(main_module.utils, "is_market_open", lambda *args, **kwargs: True)
+    monkeypatch.setattr(main_module.utils, "now_market", lambda *args, **kwargs: now_market)
+
+    def _bars_for_symbol(symbol, timeframe, lookback=1):
+        if symbol == "AAA":
+            return [{"timestamp": stale_ts}]
+        return [{"timestamp": fresh_ts}]
+
+    monkeypatch.setattr(main_module.alpaca_client, "get_bars", _bars_for_symbol)
+
+    ok = session._run_preflight_gate({"status": "Active", "buying_power": 1000.0, "equity": 100000.0})
+
+    assert ok is True

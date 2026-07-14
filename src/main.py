@@ -38,6 +38,7 @@ SCANNER_SNAPSHOT_PATH = DATA_UI_DIR / "scanner_snapshot.json"
 STOP_SCANS_FLAG_PATH = DATA_UI_DIR / "stop_scans.flag"
 ACTIVE_BOT_PROCESS_PATH = DATA_UI_DIR / "active_bot_process.json"
 RUNTIME_STATUS_PATH = DATA_UI_DIR / "runtime_status.json"
+DEFAULT_PREFLIGHT_PROBE_SYMBOLS = ["SPY", "AAPL", "MSFT"]
 
 
 def _write_active_bot_process_state() -> None:
@@ -468,8 +469,22 @@ class TradingSession:
             return "No symbols configured for market-data freshness check"
 
         now_market = utils.now_market()
-        checked_symbols = symbols[: self.preflight_symbols_to_check]
+        checked_symbols: List[str] = []
+        for probe in DEFAULT_PREFLIGHT_PROBE_SYMBOLS:
+            if probe in symbols and probe not in checked_symbols:
+                checked_symbols.append(probe)
+            if len(checked_symbols) >= self.preflight_symbols_to_check:
+                break
+
+        if len(checked_symbols) < self.preflight_symbols_to_check:
+            for symbol in symbols:
+                if symbol not in checked_symbols:
+                    checked_symbols.append(symbol)
+                if len(checked_symbols) >= self.preflight_symbols_to_check:
+                    break
+
         stale_notes: List[str] = []
+        fresh_count = 0
 
         for symbol in checked_symbols:
             try:
@@ -494,13 +509,22 @@ class TradingSession:
                 )
             if age_minutes > self.preflight_max_market_data_age_minutes:
                 stale_notes.append(f"{symbol}={age_minutes:.1f}m_old")
+            else:
+                fresh_count += 1
 
-        if stale_notes:
+        if stale_notes and fresh_count == 0:
             return (
                 "Market data freshness check failed "
                 f"(max_age={self.preflight_max_market_data_age_minutes}m): "
                 + ", ".join(stale_notes)
             )
+
+        if stale_notes and fresh_count > 0:
+            self.logger.logger.warning(
+                "PREFLIGHT DATA NOTE | Partial stale market data observed but at least one probe is fresh: "
+                + ", ".join(stale_notes)
+            )
+
         return None
 
     def _run_preflight_gate(self, account: Dict[str, Any]) -> bool:
