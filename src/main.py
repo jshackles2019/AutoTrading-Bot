@@ -196,9 +196,10 @@ def _resolve_risk_config(config: Dict[str, Any], args: argparse.Namespace) -> Di
 
 
 def _resolve_automation_config(config: Dict[str, Any], args: argparse.Namespace) -> Dict[str, Any]:
-    """Resolve automation controls (schedule gate) from settings + CLI overrides."""
+    """Resolve automation controls from settings + CLI overrides."""
     automation = dict(config.get("automation", {}))
     preflight = dict(automation.get("preflight", {}))
+    reconciliation = dict(automation.get("reconciliation", {}))
     trading_window = dict(automation.get("trading_window", {}))
 
     if args.schedule_enabled and args.schedule_disabled:
@@ -232,8 +233,10 @@ def _resolve_automation_config(config: Dict[str, Any], args: argparse.Namespace)
     preflight.setdefault("enabled", True)
     preflight.setdefault("max_market_data_age_minutes", 20)
     preflight.setdefault("symbols_to_check", 3)
+    reconciliation.setdefault("allow_dry_run_mismatch", False)
 
     automation["preflight"] = preflight
+    automation["reconciliation"] = reconciliation
     automation["trading_window"] = trading_window
     config["automation"] = automation
     return automation
@@ -282,6 +285,7 @@ class TradingSession:
         self.preflight_enabled = True
         self.preflight_max_market_data_age_minutes = 20.0
         self.preflight_symbols_to_check = 3
+        self.allow_dry_run_reconciliation_mismatch = False
 
         risk_cfg = self.config.get("risk", {})
         self.max_daily_drawdown_pct = risk_cfg.get("max_daily_drawdown_pct")
@@ -292,10 +296,12 @@ class TradingSession:
 
         automation_cfg = self.config.get("automation", {}) if isinstance(self.config, dict) else {}
         preflight_cfg = automation_cfg.get("preflight", {}) if isinstance(automation_cfg, dict) else {}
+        reconciliation_cfg = automation_cfg.get("reconciliation", {}) if isinstance(automation_cfg, dict) else {}
         schedule_cfg = automation_cfg.get("trading_window", {}) if isinstance(automation_cfg, dict) else {}
         self.preflight_enabled = bool(preflight_cfg.get("enabled", True))
         self.preflight_max_market_data_age_minutes = float(preflight_cfg.get("max_market_data_age_minutes", 20) or 20)
         self.preflight_symbols_to_check = max(1, int(preflight_cfg.get("symbols_to_check", 3) or 3))
+        self.allow_dry_run_reconciliation_mismatch = bool(reconciliation_cfg.get("allow_dry_run_mismatch", False))
         self.schedule_enabled = bool(schedule_cfg.get("enabled", False))
         self.schedule_start = str(schedule_cfg.get("start", "09:30"))
         self.schedule_end = str(schedule_cfg.get("end", "16:00"))
@@ -418,6 +424,16 @@ class TradingSession:
         local_symbols = {str(symbol).upper() for symbol in self.active_trades.keys()}
 
         if broker_symbols != local_symbols:
+            if self.dry_run and self.allow_dry_run_reconciliation_mismatch:
+                message = (
+                    "Dry-run reconciliation bypass enabled. "
+                    f"Broker symbols={sorted(broker_symbols)} | "
+                    f"Local tracked symbols={sorted(local_symbols)}"
+                )
+                self.logger.logger.warning(f"SAFE MODE BYPASS (DRY-RUN) | {message}")
+                self._write_runtime_status("starting", message)
+                return
+
             self._set_entry_lockout(
                 "Startup reconciliation mismatch detected. "
                 f"Broker symbols={sorted(broker_symbols)} | "
@@ -600,6 +616,9 @@ class TradingSession:
                     "enabled": self.preflight_enabled,
                     "max_market_data_age_minutes": self.preflight_max_market_data_age_minutes,
                     "symbols_to_check": self.preflight_symbols_to_check,
+                },
+                "reconciliation": {
+                    "allow_dry_run_mismatch": self.allow_dry_run_reconciliation_mismatch,
                 },
                 "symbol_cooldowns": self.symbol_cooldowns,
             }

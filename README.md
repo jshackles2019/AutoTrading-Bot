@@ -256,6 +256,8 @@ Startup reconciliation safe mode:
 - On session start, broker open positions are reconciled against locally tracked active positions.
 - If they do not match, bot enters safe-mode entry lockout (no new entries) and writes lockout state to `data/ui/runtime_status.json`.
 - Lockout can be acknowledged/reset from Home UI (`Acknowledge/Reset Halt`) after manual review.
+- Optional dry-run bypass: set `automation.reconciliation.allow_dry_run_mismatch: true` to allow startup in dry-run mode when broker/local symbols mismatch.
+  - Live mode still enforces lockout on mismatch.
 
 Runtime reset controls:
 - UI Home page provides:

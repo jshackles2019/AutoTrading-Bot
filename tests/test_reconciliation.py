@@ -52,6 +52,58 @@ def test_startup_reconciliation_match_allows_entries(monkeypatch):
     assert session.entry_lockout is False
 
 
+def test_startup_reconciliation_mismatch_can_be_bypassed_in_dry_run(monkeypatch):
+    from src import main as main_module
+
+    monkeypatch.setattr(
+        main_module.alpaca_client,
+        "get_open_positions",
+        lambda: [{"symbol": "AAPL", "qty": 1}],
+    )
+
+    session = TradingSession(
+        {
+            "symbols": ["AAPL"],
+            "risk": {},
+            "automation": {"reconciliation": {"allow_dry_run_mismatch": True}},
+        },
+        dry_run=True,
+    )
+    session.active_trades = {}
+    session.entry_lockout = False
+    session.entry_lockout_reason = None
+
+    session._perform_startup_reconciliation()
+
+    assert session.entry_lockout is False
+
+
+def test_startup_reconciliation_mismatch_not_bypassed_in_live_mode(monkeypatch):
+    from src import main as main_module
+
+    monkeypatch.setattr(
+        main_module.alpaca_client,
+        "get_open_positions",
+        lambda: [{"symbol": "AAPL", "qty": 1}],
+    )
+
+    session = TradingSession(
+        {
+            "symbols": ["AAPL"],
+            "risk": {},
+            "automation": {"reconciliation": {"allow_dry_run_mismatch": True}},
+        },
+        dry_run=False,
+    )
+    session.active_trades = {}
+    session.entry_lockout = False
+    session.entry_lockout_reason = None
+
+    session._perform_startup_reconciliation()
+
+    assert session.entry_lockout is True
+
+
 def test_runtime_status_marks_safe_mode_when_running_and_locked(tmp_path):
     from src import main as main_module
 

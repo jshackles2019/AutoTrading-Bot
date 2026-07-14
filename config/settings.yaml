@@ -27,6 +27,8 @@ automation:
     enabled: true
     max_market_data_age_minutes: 20
     symbols_to_check: 3
+  reconciliation:
+    allow_dry_run_mismatch: false
   trading_window:
     enabled: true
     start: "09:30"
