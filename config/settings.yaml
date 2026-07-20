@@ -22,13 +22,21 @@ timeframe: 5Min
 lookback: 50
 loop_interval_seconds: 60
 
+strategy:
+  lookback_support: 20
+  lookback_resistance: 20
+  volume_threshold_factor: 1.2
+  atr_multiplier: 2.0
+  target_multiplier: 2.0
+  check_volatility: false
+
 automation:
   preflight:
     enabled: true
     max_market_data_age_minutes: 20
     symbols_to_check: 3
   reconciliation:
-    allow_dry_run_mismatch: false
+    allow_dry_run_mismatch: true
   trading_window:
     enabled: true
     start: "09:30"

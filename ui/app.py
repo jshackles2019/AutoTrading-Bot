@@ -26,6 +26,7 @@ DATA_UI = ROOT / "data" / "ui"
 BG_STATE_FILE = DATA_UI / "background_runner.json"
 BG_OUTPUT_FILE = DATA_LOGS / "background_runner.log"
 SCANNER_SNAPSHOT_FILE = DATA_UI / "scanner_snapshot.json"
+RUNNING_CANDIDATES_FILE = DATA_UI / "running_candidates.json"
 STOP_SCANS_FLAG_FILE = DATA_UI / "stop_scans.flag"
 AUTO_TRADER_PRESETS_FILE = DATA_UI / "auto_trader_presets.json"
 WATCHDOG_STATE_FILE = DATA_UI / "watchdog_state.json"
@@ -421,6 +422,23 @@ def _load_scanner_snapshot() -> Optional[dict]:
         return None
 
 
+def _clear_running_leaderboard_snapshot_fields() -> bool:
+    """Clear running leaderboard fields while preserving latest-loop snapshot context."""
+    snapshot = _load_scanner_snapshot()
+    if not snapshot:
+        return False
+
+    snapshot["running_universe_size"] = 0
+    snapshot["top_analyzed"] = []
+
+    try:
+        DATA_UI.mkdir(parents=True, exist_ok=True)
+        SCANNER_SNAPSHOT_FILE.write_text(json.dumps(snapshot, indent=2), encoding="utf-8")
+        return True
+    except Exception:
+        return False
+
+
 def _account_keys_present() -> bool:
     return bool(os.getenv("ALPACA_KEY_ID") and os.getenv("ALPACA_SECRET_KEY"))
 
@@ -528,30 +546,30 @@ def _default_auto_trader_presets() -> dict[str, dict[str, float | int | str]]:
             "risk_max_consecutive_losses": 2,
         },
         "balanced": {
-            "max_symbols": 500,
+            "max_symbols": 700,
             "scan_selection": "rotating",
-            "top_candidates": 25,
-            "min_average_volume": 100000,
-            "risk_max_trades_per_day": 2,
-            "risk_max_risk_pct": 0.005,
-            "risk_max_open_risk_pct": 0.01,
+            "top_candidates": 35,
+            "min_average_volume": 60000,
+            "risk_max_trades_per_day": 3,
+            "risk_max_risk_pct": 0.006,
+            "risk_max_open_risk_pct": 0.015,
             "risk_max_position_pct": 0.03,
             "risk_max_open_positions": 5,
-            "risk_symbol_cooldown_minutes": 30,
+            "risk_symbol_cooldown_minutes": 20,
             "risk_max_daily_drawdown_pct": 0.03,
             "risk_max_consecutive_losses": 3,
         },
         "aggressive": {
-            "max_symbols": 900,
+            "max_symbols": 1200,
             "scan_selection": "rotating",
-            "top_candidates": 40,
-            "min_average_volume": 50000,
-            "risk_max_trades_per_day": 4,
-            "risk_max_risk_pct": 0.008,
-            "risk_max_open_risk_pct": 0.02,
-            "risk_max_position_pct": 0.05,
-            "risk_max_open_positions": 8,
-            "risk_symbol_cooldown_minutes": 20,
+            "top_candidates": 60,
+            "min_average_volume": 25000,
+            "risk_max_trades_per_day": 6,
+            "risk_max_risk_pct": 0.01,
+            "risk_max_open_risk_pct": 0.025,
+            "risk_max_position_pct": 0.06,
+            "risk_max_open_positions": 10,
+            "risk_symbol_cooldown_minutes": 15,
             "risk_max_daily_drawdown_pct": 0.05,
             "risk_max_consecutive_losses": 4,
         },
@@ -1249,6 +1267,33 @@ with left:
                 if err:
                     st.text_area("reset-runtime-stderr", err, height=120)
 
+    st.caption("Scanner leaderboard controls")
+    clear_running_leaderboard_confirm = st.checkbox(
+        "Confirm clear running top candidates",
+        value=False,
+        key="confirm_clear_running_leaderboard",
+        help="Clears only the persisted running scanner leaderboard. Runtime safety state is unchanged.",
+    )
+    clear_running_leaderboard_clicked = st.button("Clear Running Leaderboard", width="stretch")
+    if clear_running_leaderboard_clicked:
+        if not clear_running_leaderboard_confirm:
+            st.warning("Enable confirmation before clearing running leaderboard state.")
+        else:
+            deleted_file = False
+            try:
+                if RUNNING_CANDIDATES_FILE.exists():
+                    RUNNING_CANDIDATES_FILE.unlink()
+                    deleted_file = True
+            except Exception:
+                deleted_file = False
+
+            snapshot_updated = _clear_running_leaderboard_snapshot_fields()
+            if deleted_file or snapshot_updated:
+                st.success("Running scanner leaderboard cleared.")
+                st.rerun()
+            else:
+                st.info("No running leaderboard state found to clear.")
+
     start_col, stop_col, req_stop_col, clear_stop_col = st.columns(4)
     with start_col:
         start_bg_clicked = st.button("Start Background", width="stretch")
@@ -1431,6 +1476,7 @@ with right:
                 m2.metric("Buy signals", int(snapshot.get("buy_signals", 0)))
                 m3.metric("Selected", int(snapshot.get("selected", 0)))
                 m4.metric("Top analyzed", int(len(snapshot.get("top_analyzed", []))))
+                st.caption(f"Running analyzed universe: {int(snapshot.get('running_universe_size', 0))}")
 
                 top_rows = snapshot.get("top", [])
                 if top_rows:
@@ -1441,7 +1487,12 @@ with right:
                         st.info("No BUY candidates in latest snapshot. Showing top analyzed symbols.")
                         st.dataframe(pd.DataFrame(analyzed_rows), width="stretch")
                     else:
-                        st.info("No ranked candidates in latest snapshot.")
+                        latest_rows = snapshot.get("top_latest", [])
+                        if latest_rows:
+                            st.info("Running leaderboard is empty. Showing latest analyzed symbols.")
+                            st.dataframe(pd.DataFrame(latest_rows), width="stretch")
+                        else:
+                            st.info("No ranked candidates in latest snapshot.")
             else:
                 st.info("No scanner snapshot found yet.")
 

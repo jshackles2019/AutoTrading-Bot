@@ -35,6 +35,7 @@ except ImportError:
 
 DATA_UI_DIR = Path(__file__).resolve().parents[1] / "data" / "ui"
 SCANNER_SNAPSHOT_PATH = DATA_UI_DIR / "scanner_snapshot.json"
+RUNNING_CANDIDATES_PATH = DATA_UI_DIR / "running_candidates.json"
 STOP_SCANS_FLAG_PATH = DATA_UI_DIR / "stop_scans.flag"
 ACTIVE_BOT_PROCESS_PATH = DATA_UI_DIR / "active_bot_process.json"
 RUNTIME_STATUS_PATH = DATA_UI_DIR / "runtime_status.json"
@@ -278,6 +279,7 @@ class TradingSession:
         self.scan_cursor = 0
         self._rng = random.Random()
         self.symbol_cooldowns: Dict[str, float] = {}
+        self.running_ranked_candidates: Dict[str, Dict[str, Any]] = {}
         self.halt_reason: Optional[str] = None
         self.entry_lockout = False
         self.entry_lockout_reason: Optional[str] = None
@@ -313,6 +315,68 @@ class TradingSession:
         self.force_halt_reason = str(test_hooks.get("force_halt_reason", "Forced halt test hook"))
 
         self._restore_runtime_context()
+        self._restore_running_candidates()
+
+    def _restore_running_candidates(self) -> None:
+        """Restore rolling analyzed leaderboard state from disk."""
+        if not RUNNING_CANDIDATES_PATH.exists():
+            return
+        try:
+            payload = json.loads(RUNNING_CANDIDATES_PATH.read_text(encoding="utf-8"))
+        except Exception:
+            return
+
+        rows = payload.get("candidates") if isinstance(payload, dict) else None
+        if not isinstance(rows, list):
+            return
+
+        restored: Dict[str, Dict[str, Any]] = {}
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            symbol = str(row.get("symbol", "")).upper().strip()
+            if not symbol:
+                continue
+            try:
+                score = float(row.get("score", 0.0) or 0.0)
+            except Exception:
+                score = 0.0
+
+            signal = row.get("signal", {})
+            if not isinstance(signal, dict):
+                signal = {}
+
+            previous = restored.get(symbol)
+            if previous is None or score > float(previous.get("score", 0.0) or 0.0):
+                restored[symbol] = {
+                    "symbol": symbol,
+                    "score": score,
+                    "signal": signal,
+                }
+
+        if restored:
+            self.running_ranked_candidates = restored
+            self.logger.logger.info(
+                f"RESTORE | running candidate leaderboard loaded ({len(restored)} symbols)"
+            )
+
+    def _persist_running_candidates(self) -> None:
+        """Persist rolling analyzed leaderboard state for restart continuity."""
+        try:
+            DATA_UI_DIR.mkdir(parents=True, exist_ok=True)
+            top_rows = sorted(
+                self.running_ranked_candidates.values(),
+                key=lambda c: c.get("score", 0.0),
+                reverse=True,
+            )[:5000]
+            payload = {
+                "timestamp": datetime.now().isoformat(timespec="seconds"),
+                "count": len(top_rows),
+                "candidates": top_rows,
+            }
+            RUNNING_CANDIDATES_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception as e:
+            self.logger.log_error(f"Failed to persist running candidates: {e}")
 
     def _restore_runtime_context(self) -> None:
         """Restore breaker-related runtime context so restarts preserve protections."""
@@ -941,28 +1005,76 @@ class TradingSession:
         ranked_buy = scored_buy[:max(1, top_candidates)] if scored_buy else []
 
         scored_all.sort(key=lambda c: c["score"], reverse=True)
-        ranked_analyzed = scored_all[:max(1, top_candidates)] if scored_all else []
+        ranked_latest = scored_all[:max(1, top_candidates)] if scored_all else []
+        ranked_running = self._update_running_candidates(scored_all, top_candidates)
 
         self.logger.logger.info(
             f"SCAN | scanned={scanned} buy_signals={buy_signals} selected={len(ranked_buy)}"
         )
-        if ranked_analyzed:
-            preview = ", ".join([f"{c['symbol']}:{c['score']:.2f}" for c in ranked_analyzed[:5]])
-            self.logger.logger.info(f"RANKED | analyzed top candidates: {preview}")
+        if ranked_latest:
+            preview = ", ".join([f"{c['symbol']}:{c['score']:.2f}" for c in ranked_latest[:5]])
+            self.logger.logger.info(f"RANKED | latest analyzed top candidates: {preview}")
+        if ranked_running:
+            preview_running = ", ".join([f"{c['symbol']}:{c['score']:.2f}" for c in ranked_running[:5]])
+            self.logger.logger.info(f"RANKED | running analyzed top candidates: {preview_running}")
         if ranked_buy:
             preview_buy = ", ".join([f"{c['symbol']}:{c['score']:.2f}" for c in ranked_buy[:5]])
             self.logger.logger.info(f"RANKED | buy candidates: {preview_buy}")
 
-        self._write_scanner_snapshot(scanned, buy_signals, ranked_buy, ranked_analyzed)
+        self._write_scanner_snapshot(
+            scanned,
+            buy_signals,
+            ranked_buy,
+            ranked_running,
+            ranked_latest,
+        )
 
         return ranked_buy
+
+    def _update_running_candidates(
+        self,
+        scored_all: List[Dict[str, Any]],
+        top_candidates: int,
+    ) -> List[Dict[str, Any]]:
+        """Maintain a rolling top-ranked analyzed list across scan loops."""
+        for candidate in scored_all:
+            symbol = str(candidate.get("symbol", "")).upper()
+            if not symbol:
+                continue
+
+            score = float(candidate.get("score", 0.0) or 0.0)
+            previous = self.running_ranked_candidates.get(symbol)
+            if previous is None or score > float(previous.get("score", 0.0) or 0.0):
+                self.running_ranked_candidates[symbol] = {
+                    "symbol": symbol,
+                    "signal": candidate.get("signal", {}),
+                    "score": score,
+                }
+
+        # Bound memory growth when scanning very large universes for long sessions.
+        if len(self.running_ranked_candidates) > 5000:
+            keep = max(500, int(max(1, top_candidates) * 50))
+            trimmed = sorted(
+                self.running_ranked_candidates.values(),
+                key=lambda c: c.get("score", 0.0),
+                reverse=True,
+            )[:keep]
+            self.running_ranked_candidates = {str(c["symbol"]): c for c in trimmed}
+
+        ranked_running = sorted(
+            self.running_ranked_candidates.values(),
+            key=lambda c: c.get("score", 0.0),
+            reverse=True,
+        )
+        return ranked_running[:max(1, top_candidates)] if ranked_running else []
 
     def _write_scanner_snapshot(
         self,
         scanned: int,
         buy_signals: int,
         ranked_buy: List[Dict[str, Any]],
-        ranked_analyzed: List[Dict[str, Any]],
+        ranked_running: List[Dict[str, Any]],
+        ranked_latest: List[Dict[str, Any]],
     ) -> None:
         """Persist latest scanner/ranking result for UI visualization."""
         try:
@@ -972,6 +1084,7 @@ class TradingSession:
                 "scanned": scanned,
                 "buy_signals": buy_signals,
                 "selected": len(ranked_buy),
+                "running_universe_size": len(self.running_ranked_candidates),
                 "top": [
                     {
                         "symbol": c["symbol"],
@@ -996,10 +1109,24 @@ class TradingSession:
                         "target_level": c.get("signal", {}).get("target_level"),
                         "volume_check": c.get("signal", {}).get("volume_check"),
                     }
-                    for c in ranked_analyzed
+                    for c in ranked_running
+                ],
+                "top_latest": [
+                    {
+                        "symbol": c["symbol"],
+                        "score": round(float(c.get("score", 0.0)), 4),
+                        "action": c.get("signal", {}).get("action", "NONE"),
+                        "confidence": c.get("signal", {}).get("confidence"),
+                        "entry_level": c.get("signal", {}).get("entry_level"),
+                        "stop_level": c.get("signal", {}).get("stop_level"),
+                        "target_level": c.get("signal", {}).get("target_level"),
+                        "volume_check": c.get("signal", {}).get("volume_check"),
+                    }
+                    for c in ranked_latest
                 ],
             }
             SCANNER_SNAPSHOT_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+            self._persist_running_candidates()
         except Exception as e:
             self.logger.log_error(f"Failed to write scanner snapshot: {e}")
 

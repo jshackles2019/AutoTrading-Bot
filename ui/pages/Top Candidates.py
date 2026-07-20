@@ -61,9 +61,10 @@ def _render_candidates() -> None:
     m2.metric("BUY Signals", int(snapshot.get("buy_signals", 0)))
     m3.metric("Selected BUY", int(snapshot.get("selected", 0)))
     analyzed_rows = snapshot.get("top_analyzed", [])
-    m4.metric("Top Analyzed", int(len(analyzed_rows)))
+    m4.metric("Running Top Analyzed", int(len(analyzed_rows)))
+    st.caption(f"Running analyzed universe: {int(snapshot.get('running_universe_size', 0))}")
 
-    st.subheader("Top Analyzed Symbols")
+    st.subheader("Running Top Analyzed Symbols")
     if analyzed_rows:
         analyzed_df = pd.DataFrame(analyzed_rows)
         if "score" in analyzed_df.columns:
@@ -72,6 +73,17 @@ def _render_candidates() -> None:
         st.dataframe(analyzed_df, use_container_width=True)
     else:
         st.info("No analyzed candidate rows yet.")
+
+    st.subheader("Latest Loop Top Analyzed")
+    latest_rows = snapshot.get("top_latest", [])
+    if latest_rows:
+        latest_df = pd.DataFrame(latest_rows)
+        if "score" in latest_df.columns:
+            latest_df["score"] = pd.to_numeric(latest_df["score"], errors="coerce")
+            latest_df = latest_df.sort_values(by="score", ascending=False)
+        st.dataframe(latest_df, use_container_width=True)
+    else:
+        st.info("No latest-loop analyzed rows in the snapshot.")
 
     st.subheader("BUY Candidates")
     buy_rows = snapshot.get("top", [])

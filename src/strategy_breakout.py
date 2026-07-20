@@ -82,8 +82,9 @@ def evaluate(bars: List[Dict[str, Any]], symbol: str,
     target_multiplier = config.get("target_multiplier", 2.0)
     check_volatility = config.get("check_volatility", False)
     
-    # Validate input
-    if not bars or len(bars) < max(lookback_support, lookback_resistance):
+    # Validate input. We need one extra bar because support/resistance are
+    # derived from prior bars only (excluding the current bar).
+    if not bars or len(bars) < (max(lookback_support, lookback_resistance) + 1):
         return BreakoutSignal(symbol, action="NONE").to_dict()
     
     # Extract price and volume data
@@ -101,9 +102,11 @@ def evaluate(bars: List[Dict[str, Any]], symbol: str,
     # Previous bar
     prev_close = closes[-2] if len(closes) > 1 else current_close
     
-    # Calculate support and resistance
-    support = _calculate_support(lows, lookback_support)
-    resistance = _calculate_resistance(highs, lookback_resistance)
+    # Calculate support/resistance from completed prior bars only.
+    # Including the current bar in resistance can make breakouts impossible
+    # because close is typically <= current high.
+    support = _calculate_support(lows[:-1], lookback_support)
+    resistance = _calculate_resistance(highs[:-1], lookback_resistance)
     
     # Check for breakout above resistance
     is_breakout = current_close > resistance and prev_close <= resistance
